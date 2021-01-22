@@ -24,6 +24,7 @@
 #include "QueryEngine/JoinHashTable/PerfectJoinHashTable.h"
 #include "QueryEngine/JoinHashTable/Runtime/HashJoinKeyHandlers.h"
 #include "QueryEngine/JoinHashTable/Runtime/JoinHashTableGpuUtils.h"
+#include "Utils/Threading.h"
 
 std::unique_ptr<
     HashTableCache<HashTableCacheKey, OverlapsJoinHashTable::HashTableCacheValue>>
@@ -225,21 +226,20 @@ void OverlapsJoinHashTable::reifyWithLayout(const HashType layout) {
           << overlaps_hashjoin_bucket_threshold_ << " giving: entry count " << entry_count
           << " hash table size " << hash_table_size;
 
-  std::vector<std::future<void>> init_threads;
+  std::vector<utils::future<void>> init_threads;
   for (int device_id = 0; device_id < device_count_; ++device_id) {
     const auto fragments =
         shard_count
             ? only_shards_for_device(query_info.fragments, device_id, device_count_)
             : query_info.fragments;
-    init_threads.push_back(std::async(std::launch::async,
-                                      &OverlapsJoinHashTable::reifyForDevice,
-                                      this,
-                                      columns_per_device[device_id],
-                                      layout,
-                                      entry_count,
-                                      emitted_keys_count,
-                                      device_id,
-                                      logger::thread_id()));
+    init_threads.push_back(utils::async(&OverlapsJoinHashTable::reifyForDevice,
+                                        this,
+                                        columns_per_device[device_id],
+                                        layout,
+                                        entry_count,
+                                        emitted_keys_count,
+                                        device_id,
+                                        logger::thread_id()));
   }
   for (auto& init_thread : init_threads) {
     init_thread.wait();
@@ -417,10 +417,9 @@ std::pair<size_t, size_t> OverlapsJoinHashTable::approximateTupleCount(
     host_hll_buffer.resize(count_distinct_desc.bitmapPaddedSizeBytes());
   }
   std::vector<size_t> emitted_keys_count_device_threads(device_count_, 0);
-  std::vector<std::future<void>> approximate_distinct_device_threads;
+  std::vector<utils::future<void>> approximate_distinct_device_threads;
   for (int device_id = 0; device_id < device_count_; ++device_id) {
-    approximate_distinct_device_threads.emplace_back(std::async(
-        std::launch::async,
+    approximate_distinct_device_threads.emplace_back(utils::async(
         [device_id,
          &columns_per_device,
          &count_distinct_desc,

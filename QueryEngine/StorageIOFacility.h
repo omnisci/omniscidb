@@ -28,6 +28,10 @@
 #include "Shared/likely.h"
 #include "Shared/thread_count.h"
 
+#include <future>
+
+#include "Utils/Threading.h"
+
 template <typename EXECUTOR_TRAITS, typename FRAGMENT_UPDATER = UpdateLogForFragment>
 class StorageIOFacility {
  public:
@@ -368,7 +372,7 @@ template <typename EXECUTOR_TRAITS, typename FRAGMENT_UPDATER>
 typename StorageIOFacility<EXECUTOR_TRAITS, FRAGMENT_UPDATER>::UpdateCallback
 StorageIOFacility<EXECUTOR_TRAITS, FRAGMENT_UPDATER>::yieldDeleteCallback(
     DeleteTransactionParameters& delete_parameters) {
-  using RowProcessingFuturesVector = std::vector<std::future<uint64_t>>;
+  using RowProcessingFuturesVector = std::vector<utils::future<uint64_t>>;
 
   if (delete_parameters.tableIsTemporary()) {
     auto callback = [this](FragmentUpdaterType const& update_log) -> void {
@@ -500,17 +504,15 @@ StorageIOFacility<EXECUTOR_TRAITS, FRAGMENT_UPDATER>::yieldDeleteCallback(
 
       for (unsigned i = 0; i < (unsigned)usable_threads; i++) {
         row_processing_futures.emplace_back(
-            std::async(std::launch::async,
-                       std::forward<decltype(process_rows)>(process_rows),
-                       get_row_index(i),
-                       complete_row_block_size));
+            utils::async(std::forward<decltype(process_rows)>(process_rows),
+                         get_row_index(i),
+                         complete_row_block_size));
       }
       if (partial_row_block_size) {
         row_processing_futures.emplace_back(
-            std::async(std::launch::async,
-                       std::forward<decltype(process_rows)>(process_rows),
-                       get_row_index(usable_threads),
-                       partial_row_block_size));
+            utils::async(std::forward<decltype(process_rows)>(process_rows),
+                         get_row_index(usable_threads),
+                         partial_row_block_size));
       }
 
       uint64_t rows_processed(0);

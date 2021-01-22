@@ -46,6 +46,8 @@ using key_t = size_t;
 #include <cuda.h>
 #endif  // HAVE_CUDA
 
+#include "Utils/Threading.h"
+
 #define ARROW_RECORDBATCH_MAKE arrow::RecordBatch::Make
 
 using namespace arrow;
@@ -777,7 +779,7 @@ std::shared_ptr<arrow::RecordBatch> ArrowResultSetConverter::getArrowBatch(
 
     values_.resize(col_count);
     is_valid_.resize(col_count);
-    std::vector<std::future<void>> child_threads;
+    std::vector<utils::future<void>> child_threads;
     size_t num_threads =
         std::min(multithreaded ? (size_t)cpu_threads() : (size_t)1, non_lazy_col_count);
 
@@ -790,14 +792,13 @@ std::shared_ptr<arrow::RecordBatch> ArrowResultSetConverter::getArrowBatch(
           non_lazy_col_pos.empty() ? start_col : non_lazy_col_pos[start_col];
       size_t phys_end_col =
           non_lazy_col_pos.empty() ? end_col : non_lazy_col_pos[end_col];
-      child_threads.push_back(std::async(std::launch::async,
-                                         convert_columns,
+      child_threads.push_back(utils::async(convert_columns,
                                          std::ref(values_),
                                          std::ref(is_valid_),
                                          std::ref(result_columns),
                                          non_lazy_cols,
                                          phys_start_col,
-                                         phys_end_col));
+                                         phys_end_col) );
     }
     for (auto& child : child_threads) {
       child.get();
@@ -809,7 +810,7 @@ std::shared_ptr<arrow::RecordBatch> ArrowResultSetConverter::getArrowBatch(
     row_count = 0;
     if (multithreaded) {
       const size_t cpu_count = cpu_threads();
-      std::vector<std::future<size_t>> child_threads;
+      std::vector<utils::future<size_t>> child_threads;
       std::vector<std::vector<std::shared_ptr<ValueArray>>> column_value_segs(
           cpu_count, std::vector<std::shared_ptr<ValueArray>>(col_count, nullptr));
       std::vector<std::vector<std::shared_ptr<std::vector<bool>>>> null_bitmap_segs(
@@ -818,8 +819,7 @@ std::shared_ptr<arrow::RecordBatch> ArrowResultSetConverter::getArrowBatch(
       for (size_t i = 0, start_entry = 0; start_entry < entry_count;
            ++i, start_entry += stride) {
         const auto end_entry = std::min(entry_count, start_entry + stride);
-        child_threads.push_back(std::async(std::launch::async,
-                                           fetch,
+        child_threads.push_back(utils::async(fetch,
                                            std::ref(column_value_segs[i]),
                                            std::ref(null_bitmap_segs[i]),
                                            non_lazy_cols,

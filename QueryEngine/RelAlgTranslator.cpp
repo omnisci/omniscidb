@@ -34,6 +34,8 @@
 #include "Shared/likely.h"
 #include "Shared/thread_count.h"
 
+#include "Utils/Threading.h"
+
 extern bool g_enable_watchdog;
 
 bool g_enable_experimental_string_functions = false;
@@ -482,7 +484,7 @@ std::shared_ptr<Analyzer::Expr> get_in_values_expr(std::shared_ptr<Analyzer::Exp
   const size_t fetcher_count = cpu_threads();
   std::vector<std::list<std::shared_ptr<Analyzer::Expr>>> expr_set(
       fetcher_count, std::list<std::shared_ptr<Analyzer::Expr>>());
-  std::vector<std::future<void>> fetcher_threads;
+  std::vector<utils::future<void>> fetcher_threads;
   const auto& ti = arg->get_type_info();
   const auto entry_count = val_set.entryCount();
   for (size_t i = 0,
@@ -491,8 +493,7 @@ std::shared_ptr<Analyzer::Expr> get_in_values_expr(std::shared_ptr<Analyzer::Exp
        i < fetcher_count && start_entry < entry_count;
        ++i, start_entry += stride) {
     const auto end_entry = std::min(start_entry + stride, entry_count);
-    fetcher_threads.push_back(std::async(
-        std::launch::async,
+    fetcher_threads.push_back(utils::async(
         [&](std::list<std::shared_ptr<Analyzer::Expr>>& in_vals,
             const size_t start,
             const size_t end) {
@@ -769,7 +770,7 @@ std::shared_ptr<Analyzer::Expr> RelAlgTranslator::getInIntegerSetExpr(
   std::vector<int64_t> value_exprs;
   const size_t fetcher_count = cpu_threads();
   std::vector<std::vector<int64_t>> expr_set(fetcher_count);
-  std::vector<std::future<void>> fetcher_threads;
+  std::vector<utils::future<void>> fetcher_threads;
   const auto& arg_type = arg->get_type_info();
   const auto entry_count = val_set.entryCount();
   CHECK_EQ(size_t(1), val_set.colCount());
@@ -799,8 +800,7 @@ std::shared_ptr<Analyzer::Expr> RelAlgTranslator::getInIntegerSetExpr(
           col_type.get_comp_param(), val_set.getRowSetMemOwner(), true);
       CHECK(sd);
       const auto needle_null_val = inline_int_null_val(arg_type);
-      fetcher_threads.push_back(std::async(
-          std::launch::async,
+      fetcher_threads.push_back(utils::async(
           [this,
            &val_set,
            &total_in_vals_count,
@@ -836,8 +836,7 @@ std::shared_ptr<Analyzer::Expr> RelAlgTranslator::getInIntegerSetExpr(
           end_entry));
     } else {
       CHECK(arg_type.is_integer());
-      fetcher_threads.push_back(std::async(
-          std::launch::async,
+      fetcher_threads.push_back(utils::async(
           [&val_set, &total_in_vals_count](
               std::vector<int64_t>& in_vals, const size_t start, const size_t end) {
             fill_integer_in_vals(in_vals, total_in_vals_count, &val_set, {start, end});

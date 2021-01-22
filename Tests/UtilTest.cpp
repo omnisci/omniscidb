@@ -35,15 +35,14 @@ TEST(Shared, Intervals) {
   std::array<std::atomic<int>, M> array;
   for (int n_workers = 1; n_workers <= 2 * M; ++n_workers) {
     std::for_each(array.begin(), array.end(), [](auto& v) { v = 0; });
-    std::vector<std::future<void>> threads;
+    std::vector<utils::future<void>> threads;
     int max_interval_size = std::numeric_limits<int>::min();
     int min_interval_size = std::numeric_limits<int>::max();
     for (auto const interval : makeIntervals(0, M, n_workers)) {
       EXPECT_LT(interval.begin, interval.end);
       max_interval_size = std::max(max_interval_size, interval.end - interval.begin);
       min_interval_size = std::min(min_interval_size, interval.end - interval.begin);
-      threads.push_back(std::async(
-          std::launch::async,
+      threads.push_back(utils::async(
           [&array](Interval<int> interval) {
             for (int i = interval.begin; i < interval.end; ++i) {
               ++array.at(i);

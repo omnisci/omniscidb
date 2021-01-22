@@ -20,6 +20,9 @@
 *.out
 *.app
 
+# Backups
+*.bak
+
 # CMake files
 CMakeCache.txt
 CMakeFiles
@@ -27,10 +30,7 @@ Makefile
 cmake_install.cmake
 install_manifest.txt
 _build/
-build/
-build_debug/
-build_release/
-build3.6/
+build*/
 !docker/build/
 
 # history files

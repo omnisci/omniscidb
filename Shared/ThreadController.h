@@ -23,6 +23,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "Utils/Threading.h"
+
 namespace ThreadController_NS {
 
 template <typename FutureReturnType>

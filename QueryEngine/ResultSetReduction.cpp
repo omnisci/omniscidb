@@ -32,6 +32,8 @@
 #include "Shared/likely.h"
 #include "Shared/quantile.h"
 #include "Shared/thread_count.h"
+#include "Shared/threadpool.h"
+#include "Utils/Threading.h"
 
 #include <llvm/ExecutionEngine/GenericValue.h>
 
@@ -235,15 +237,14 @@ void ResultSetStorage::reduce(const ResultSetStorage& that,
     }
     if (use_multithreaded_reduction(that_entry_count)) {
       const size_t thread_count = cpu_threads();
-      std::vector<std::future<void>> reduction_threads;
+      std::vector<utils::future<void>> reduction_threads;
       for (size_t thread_idx = 0; thread_idx < thread_count; ++thread_idx) {
         const auto thread_entry_count =
             (that_entry_count + thread_count - 1) / thread_count;
         const auto start_index = thread_idx * thread_entry_count;
         const auto end_index =
             std::min(start_index + thread_entry_count, that_entry_count);
-        reduction_threads.emplace_back(std::async(
-            std::launch::async,
+        reduction_threads.emplace_back(utils::async(
             [this,
              this_buff,
              that_buff,
@@ -296,60 +297,25 @@ void ResultSetStorage::reduce(const ResultSetStorage& that,
     return;
   }
   if (use_multithreaded_reduction(entry_count)) {
-    const size_t thread_count = cpu_threads();
-    std::vector<std::future<void>> reduction_threads;
-    for (size_t thread_idx = 0; thread_idx < thread_count; ++thread_idx) {
-      const auto thread_entry_count = (entry_count + thread_count - 1) / thread_count;
-      const auto start_index = thread_idx * thread_entry_count;
-      const auto end_index = std::min(start_index + thread_entry_count, entry_count);
-      if (query_mem_desc_.didOutputColumnar()) {
-        reduction_threads.emplace_back(std::async(std::launch::async,
-                                                  [this,
-                                                   this_buff,
-                                                   that_buff,
-                                                   start_index,
-                                                   end_index,
-                                                   &that,
-                                                   &serialized_varlen_buffer] {
-                                                    reduceEntriesNoCollisionsColWise(
-                                                        this_buff,
-                                                        that_buff,
-                                                        that,
-                                                        start_index,
-                                                        end_index,
-                                                        serialized_varlen_buffer);
-                                                  }));
-      } else {
-        reduction_threads.emplace_back(std::async(std::launch::async,
-                                                  [this,
-                                                   this_buff,
-                                                   that_buff,
-                                                   start_index,
-                                                   end_index,
-                                                   that_entry_count,
-                                                   &reduction_code,
-                                                   &that,
-                                                   &serialized_varlen_buffer] {
-                                                    CHECK(reduction_code.ir_reduce_loop);
-                                                    run_reduction_code(
-                                                        reduction_code,
-                                                        this_buff,
-                                                        that_buff,
-                                                        start_index,
-                                                        end_index,
-                                                        that_entry_count,
-                                                        &query_mem_desc_,
-                                                        &that.query_mem_desc_,
-                                                        &serialized_varlen_buffer);
-                                                  }));
-      }
-    }
-    for (auto& reduction_thread : reduction_threads) {
-      reduction_thread.wait();
-    }
-    for (auto& reduction_thread : reduction_threads) {
-      reduction_thread.get();
-    }
+    LOG(DEBUG1) << "-- parallel_for " << entry_count / 100000;
+    utils::parallel_for(
+        utils::blocked_range<size_t>(0, entry_count, 100000), [&, this](auto r) {
+          if (query_mem_desc_.didOutputColumnar()) {
+            reduceEntriesNoCollisionsColWise(
+                this_buff, that_buff, that, r.begin(), r.end(), serialized_varlen_buffer);
+          } else {
+            CHECK(reduction_code.ir_reduce_loop);
+            run_reduction_code(reduction_code,
+                               this_buff,
+                               that_buff,
+                               r.begin(),
+                               r.end(),
+                               that_entry_count,
+                               &query_mem_desc_,
+                               &that.query_mem_desc_,
+                               &serialized_varlen_buffer);
+          }
+        });
   } else {
     if (query_mem_desc_.didOutputColumnar()) {
       reduceEntriesNoCollisionsColWise(this_buff,
@@ -924,43 +890,20 @@ void ResultSetStorage::moveEntriesToBuffer(int8_t* new_buff,
   const auto key_byte_width = query_mem_desc_.getEffectiveKeyWidth();
 
   if (use_multithreaded_reduction(query_mem_desc_.getEntryCount())) {
-    const size_t thread_count = cpu_threads();
-    std::vector<std::future<void>> move_threads;
-
-    for (size_t thread_idx = 0; thread_idx < thread_count; ++thread_idx) {
-      const auto thread_entry_count =
-          (query_mem_desc_.getEntryCount() + thread_count - 1) / thread_count;
-      const auto start_index = thread_idx * thread_entry_count;
-      const auto end_index =
-          std::min(start_index + thread_entry_count, query_mem_desc_.getEntryCount());
-      move_threads.emplace_back(std::async(
-          std::launch::async,
-          [this,
-           src_buff,
-           new_buff_i64,
-           new_entry_count,
-           start_index,
-           end_index,
-           key_count,
-           row_qw_count,
-           key_byte_width] {
-            for (size_t entry_idx = start_index; entry_idx < end_index; ++entry_idx) {
-              moveOneEntryToBuffer<KeyType>(entry_idx,
-                                            new_buff_i64,
-                                            new_entry_count,
-                                            key_count,
-                                            row_qw_count,
-                                            src_buff,
-                                            key_byte_width);
-            }
-          }));
-    }
-    for (auto& move_thread : move_threads) {
-      move_thread.wait();
-    }
-    for (auto& move_thread : move_threads) {
-      move_thread.get();
-    }
+    LOG(DEBUG1) << "-- parallel_for " << query_mem_desc_.getEntryCount() / 100000;
+    utils::parallel_for(
+        utils::blocked_range<size_t>(0, query_mem_desc_.getEntryCount(), 100000),
+        [&, this](auto r) {
+          for (size_t entry_idx = r.begin(); entry_idx < r.end(); ++entry_idx) {
+            moveOneEntryToBuffer<KeyType>(entry_idx,
+                                          new_buff_i64,
+                                          new_entry_count,
+                                          key_count,
+                                          row_qw_count,
+                                          src_buff,
+                                          key_byte_width);
+          }
+        });
   } else {
     for (size_t entry_idx = 0; entry_idx < query_mem_desc_.getEntryCount(); ++entry_idx) {
       moveOneEntryToBuffer<KeyType>(entry_idx,
@@ -1190,20 +1133,31 @@ void ResultSetStorage::initializeColWise() const {
   const auto key_count = query_mem_desc_.getGroupbyColCount();
   auto this_buff = reinterpret_cast<int64_t*>(buff_);
   CHECK(!query_mem_desc_.hasKeylessHash());
-  for (size_t key_idx = 0; key_idx < key_count; ++key_idx) {
+  utils::parallel_for(size_t(0), key_count, [this, this_buff](size_t key_idx) {
     const auto first_key_off =
         key_offset_colwise(0, key_idx, query_mem_desc_.getEntryCount());
-    for (size_t i = 0; i < query_mem_desc_.getEntryCount(); ++i) {
-      this_buff[first_key_off + i] = EMPTY_KEY_64;
-    }
-  }
-  for (size_t target_idx = 0; target_idx < target_init_vals_.size(); ++target_idx) {
-    const auto first_val_off =
-        slot_offset_colwise(0, target_idx, key_count, query_mem_desc_.getEntryCount());
-    for (size_t i = 0; i < query_mem_desc_.getEntryCount(); ++i) {
-      this_buff[first_val_off + i] = target_init_vals_[target_idx];
-    }
-  }
+    utils::parallel_for(
+        utils::blocked_range<size_t>(
+            0, query_mem_desc_.getEntryCount(), 2 * 1024 * 1024 / sizeof(int64_t)),
+        [this, this_buff, first_key_off](auto r) {
+          for (auto i = r.begin(); i < r.end(); i++)
+            this_buff[first_key_off + i] = EMPTY_KEY_64;
+        });
+  });
+  utils::parallel_for(
+      size_t(0),
+      target_init_vals_.size(),
+      [this, this_buff, key_count](size_t target_idx) {
+        const auto first_val_off = slot_offset_colwise(
+            0, target_idx, key_count, query_mem_desc_.getEntryCount());
+        utils::parallel_for(
+            utils::blocked_range<size_t>(
+                0, query_mem_desc_.getEntryCount(), 2 * 1024 * 1024 / sizeof(int64_t)),
+            [this, this_buff, target_idx, first_val_off](auto r) {
+              for (auto i = r.begin(); i < r.end(); i++)
+                this_buff[first_val_off + i] = target_init_vals_[target_idx];
+            });
+      });
 }
 
 void ResultSetStorage::initializeBaselineValueSlots(int64_t* entry_slots) const {

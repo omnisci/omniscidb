@@ -20,6 +20,8 @@
 #include <future>
 #include <memory>
 
+#include "Utils/Threading.h"
+
 llvm::Value* CodeGenerator::codegen(const Analyzer::InValues* expr,
                                     const CompilationOptions& co) {
   AUTOMATIC_IR_METADATA(cgen_state_);
@@ -128,7 +130,7 @@ std::unique_ptr<InValuesBitmap> CodeGenerator::createInValuesBitmap(
     const auto needle_null_val = inline_int_null_val(ti);
     const int worker_count = val_count > 10000 ? cpu_threads() : int(1);
     std::vector<std::vector<int64_t>> values_set(worker_count, std::vector<int64_t>());
-    std::vector<std::future<bool>> worker_threads;
+    std::vector<utils::future<bool>> worker_threads;
     auto start_it = value_list.begin();
     for (size_t i = 0,
                 start_val = 0,
@@ -166,8 +168,8 @@ std::unique_ptr<InValuesBitmap> CodeGenerator::createInValuesBitmap(
         return true;
       };
       if (worker_count > 1) {
-        worker_threads.push_back(std::async(
-            std::launch::async, do_work, std::ref(values_set[i]), start_it, end_it));
+        worker_threads.push_back(
+            utils::async(do_work, std::ref(values_set[i]), start_it, end_it));
       } else {
         do_work(std::ref(values), start_it, end_it);
       }

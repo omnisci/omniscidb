@@ -40,6 +40,7 @@
 #include <bitset>
 #include <future>
 #include <numeric>
+#include "Utils/Threading.h"
 
 extern bool g_use_tbb_pool;
 
@@ -597,32 +598,24 @@ void ResultSet::parallelTop(const std::list<Analyzer::OrderEntry>& order_entries
   auto timer = DEBUG_TIMER(__func__);
   const size_t step = cpu_threads();
   std::vector<std::vector<uint32_t>> strided_permutations(step);
-  std::vector<std::future<void>> init_futures;
+  std::vector<utils::future<void>> init_futures;
   for (size_t start = 0; start < step; ++start) {
-    init_futures.emplace_back(
-        std::async(std::launch::async, [this, start, step, &strided_permutations] {
-          strided_permutations[start] = initPermutationBuffer(start, step);
-        }));
+    init_futures.emplace_back(utils::async([this, start, step, &strided_permutations] {
+      strided_permutations[start] = initPermutationBuffer(start, step);
+    }));
   }
   for (auto& init_future : init_futures) {
     init_future.wait();
   }
-  for (auto& init_future : init_futures) {
-    init_future.get();
-  }
   auto compare = createComparator(order_entries, true, executor);
-  std::vector<std::future<void>> top_futures;
+  std::vector<utils::future<void>> top_futures;
   for (auto& strided_permutation : strided_permutations) {
-    top_futures.emplace_back(
-        std::async(std::launch::async, [&strided_permutation, &compare, top_n] {
-          topPermutation(strided_permutation, top_n, compare);
-        }));
+    top_futures.emplace_back(utils::async([&strided_permutation, &compare, top_n] {
+      topPermutation(strided_permutation, top_n, compare);
+    }));
   }
   for (auto& top_future : top_futures) {
     top_future.wait();
-  }
-  for (auto& top_future : top_futures) {
-    top_future.get();
   }
   permutation_.reserve(strided_permutations.size() * top_n);
   for (const auto& strided_permutation : strided_permutations) {

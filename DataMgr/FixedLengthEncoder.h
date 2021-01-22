@@ -25,8 +25,7 @@
 #include "Encoder.h"
 
 #include <Shared/DatumFetchers.h>
-#include <tbb/parallel_for.h>
-#include <tbb/parallel_reduce.h>
+#include <Utils/Threading.h>
 #include <tuple>
 
 template <typename T, typename V>
@@ -116,7 +115,7 @@ class FixedLengthEncoder : public Encoder {
                           const size_t num_elements) override {
     const V* data = reinterpret_cast<const V*>(dst_data);
 
-    std::tie(dataMin, dataMax, has_nulls) = tbb::parallel_reduce(
+    std::tie(dataMin, dataMax, has_nulls) = utils::parallel_reduce(
         tbb::blocked_range(0UL, num_elements),
         std::tuple(static_cast<V>(dataMin), static_cast<V>(dataMax), has_nulls),
         [&](const auto& range, auto init) {

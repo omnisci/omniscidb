@@ -61,6 +61,9 @@
 #include "Shared/file_delete.h"
 #include "Shared/mapd_shared_ptr.h"
 #include "Shared/scope.h"
+#if ENABLE_ITT
+#include <ittnotify.h>
+#endif
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::concurrency;
@@ -177,6 +180,9 @@ void releaseWarmupSession(TSessionId& sessionId, std::ifstream& query_file) {
   }
 }
 
+#if ENABLE_ITT
+__itt_domain* ittquery = __itt_domain_create("Query");
+#endif
 void run_warmup_queries(mapd::shared_ptr<DBHandler> handler,
                         std::string base_path,
                         std::string query_file_path) {
@@ -196,7 +202,8 @@ void run_warmup_queries(mapd::shared_ptr<DBHandler> handler,
 
     ScopeGuard session_guard = [&] { releaseWarmupSession(sessionId, query_file); };
     query_file.open(query_file_path);
-    while (std::getline(query_file, db_info)) {
+    bool stop = false;
+    while (!stop && std::getline(query_file, db_info)) {
       if (db_info.length() == 0) {
         continue;
       }
@@ -215,6 +222,13 @@ void run_warmup_queries(mapd::shared_ptr<DBHandler> handler,
         while (std::getline(query_file, single_query)) {
           boost::algorithm::trim(single_query);
           if (single_query.length() == 0 || single_query[0] == '-') {
+#if ENABLE_ITT
+            if (single_query == "--itt_resume")
+              __itt_resume();
+            else if (single_query == "--itt_pause")
+              __itt_pause();
+#endif
+            single_query.clear();
             continue;
           }
           if (single_query[0] == '}') {
@@ -228,14 +242,28 @@ void run_warmup_queries(mapd::shared_ptr<DBHandler> handler,
           }
 
           try {
+#if ENABLE_ITT
+            __itt_frame_begin_v3(ittquery, (__itt_id*)single_query.c_str());
+#endif
             g_warmup_handler->sql_execute(ret, sessionId, single_query, true, "", -1, -1);
+#if ENABLE_ITT
+            __itt_frame_end_v3(ittquery, (__itt_id*)single_query.c_str());
+#endif
+          } catch (std::exception& e) {
+            LOG(WARNING) << "Exception " << e.what() << " while executing '"
+                         << single_query;
+            stop = true;
+            break;
           } catch (...) {
-            LOG(WARNING) << "Exception while executing '" << single_query
-                         << "', ignoring";
+            LOG(WARNING) << "Exception while executing '" << single_query << "'";
+            stop = true;
+            break;
           }
           single_query.clear();
         }
-
+#if ENABLE_ITT
+        __itt_detach();
+#endif
         // stop session and disconnect from the DB
         g_warmup_handler->disconnect(sessionId);
         sessionId = g_warmup_handler->getInvalidSessionId();

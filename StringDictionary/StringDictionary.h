@@ -18,6 +18,7 @@
 #define STRINGDICTIONARY_STRINGDICTIONARY_H
 
 #include "../Shared/mapd_shared_mutex.h"
+#include "../Utils/Threading.h"
 #include "DictRef.h"
 #include "DictionaryCache.hpp"
 #include "LeafHostInfo.h"
@@ -136,7 +137,7 @@ class StringDictionary {
   };
 
   void processDictionaryFutures(
-      std::vector<std::future<std::vector<std::pair<uint32_t, unsigned int>>>>&
+      std::vector<utils::future<std::vector<std::pair<uint32_t, unsigned int>>>>&
           dictionary_futures);
   size_t getNumStringsFromStorage(const size_t storage_slots) const noexcept;
   bool fillRateIsHigh(const size_t num_strings) const noexcept;

@@ -1508,7 +1508,7 @@ ResultSetPtr Executor::executeWorkUnitImpl(
                                      available_gpus,
                                      available_cpus);
         if (g_use_tbb_pool) {
-#ifdef HAVE_TBB
+#ifdef ENABLE_TBB
           VLOG(1) << "Using TBB thread pool for kernel dispatch.";
           launchKernels<threadpool::TbbThreadPool<void>>(shared_context,
                                                          std::move(kernels));

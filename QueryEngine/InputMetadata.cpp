@@ -21,6 +21,8 @@
 
 #include <future>
 
+#include "Utils/Threading.h"
+
 InputTableInfoCache::InputTableInfoCache(Executor* executor) : executor_(executor) {}
 
 namespace {
@@ -182,7 +184,7 @@ ChunkMetadataMap synthesize_metadata(const ResultSet* rows) {
   };
   if (result_set::use_parallel_algorithms(*rows)) {
     const size_t worker_count = cpu_threads();
-    std::vector<std::future<void>> compute_stats_threads;
+    std::vector<utils::future<void>> compute_stats_threads;
     const auto entry_count = rows->entryCount();
     for (size_t i = 0,
                 start_entry = 0,
@@ -190,8 +192,7 @@ ChunkMetadataMap synthesize_metadata(const ResultSet* rows) {
          i < worker_count && start_entry < entry_count;
          ++i, start_entry += stride) {
       const auto end_entry = std::min(start_entry + stride, entry_count);
-      compute_stats_threads.push_back(std::async(
-          std::launch::async,
+      compute_stats_threads.push_back(utils::async(
           [rows, &do_work, &dummy_encoders](
               const size_t start, const size_t end, const size_t worker_idx) {
             for (size_t i = start; i < end; ++i) {
@@ -207,9 +208,6 @@ ChunkMetadataMap synthesize_metadata(const ResultSet* rows) {
     }
     for (auto& child : compute_stats_threads) {
       child.wait();
-    }
-    for (auto& child : compute_stats_threads) {
-      child.get();
     }
   } else {
     while (true) {

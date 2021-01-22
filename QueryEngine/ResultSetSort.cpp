@@ -31,6 +31,8 @@
 
 #include <future>
 
+#include "Utils/Threading.h"
+
 std::unique_ptr<CudaMgr_Namespace::CudaMgr> g_cuda_mgr;  // for unit tests only
 
 namespace {
@@ -88,50 +90,45 @@ void ResultSet::doBaselineSort(const ExecutorDeviceType device_type,
   CHECK_GE(step, size_t(1));
   const auto key_bytewidth = query_mem_desc_.getEffectiveKeyWidth();
   if (step > 1) {
-    std::vector<std::future<void>> top_futures;
+    std::vector<utils::future<void>> top_futures;
     std::vector<std::vector<uint32_t>> strided_permutations(step);
     for (size_t start = 0; start < step; ++start) {
-      top_futures.emplace_back(std::async(
-          std::launch::async,
-          [&strided_permutations,
-           data_mgr,
-           device_type,
-           groupby_buffer,
-           pod_oe,
-           key_bytewidth,
-           layout,
-           top_n,
-           start,
-           step] {
-            if (device_type == ExecutorDeviceType::GPU) {
-              set_cuda_context(data_mgr, start);
-            }
-            strided_permutations[start] = (key_bytewidth == 4)
-                                              ? baseline_sort<int32_t>(device_type,
-                                                                       start,
-                                                                       data_mgr,
-                                                                       groupby_buffer,
-                                                                       pod_oe,
-                                                                       layout,
-                                                                       top_n,
-                                                                       start,
-                                                                       step)
-                                              : baseline_sort<int64_t>(device_type,
-                                                                       start,
-                                                                       data_mgr,
-                                                                       groupby_buffer,
-                                                                       pod_oe,
-                                                                       layout,
-                                                                       top_n,
-                                                                       start,
-                                                                       step);
-          }));
+      top_futures.emplace_back(utils::async([&strided_permutations,
+                                             data_mgr,
+                                             device_type,
+                                             groupby_buffer,
+                                             pod_oe,
+                                             key_bytewidth,
+                                             layout,
+                                             top_n,
+                                             start,
+                                             step] {
+        if (device_type == ExecutorDeviceType::GPU) {
+          set_cuda_context(data_mgr, start);
+        }
+        strided_permutations[start] = (key_bytewidth == 4)
+                                          ? baseline_sort<int32_t>(device_type,
+                                                                   start,
+                                                                   data_mgr,
+                                                                   groupby_buffer,
+                                                                   pod_oe,
+                                                                   layout,
+                                                                   top_n,
+                                                                   start,
+                                                                   step)
+                                          : baseline_sort<int64_t>(device_type,
+                                                                   start,
+                                                                   data_mgr,
+                                                                   groupby_buffer,
+                                                                   pod_oe,
+                                                                   layout,
+                                                                   top_n,
+                                                                   start,
+                                                                   step);
+      }));
     }
     for (auto& top_future : top_futures) {
       top_future.wait();
-    }
-    for (auto& top_future : top_futures) {
-      top_future.get();
     }
     permutation_.reserve(strided_permutations.size() * top_n);
     for (const auto& strided_permutation : strided_permutations) {

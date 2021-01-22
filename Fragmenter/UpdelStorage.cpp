@@ -34,11 +34,13 @@
 #include "Shared/thread_count.h"
 #include "TargetValueConvertersFactories.h"
 
+#include "Utils/Threading.h"
+
 extern bool g_enable_experimental_string_functions;
 
 namespace Fragmenter_Namespace {
 
-inline void wait_cleanup_threads(std::vector<std::future<void>>& threads) {
+inline void wait_cleanup_threads(std::vector<utils::future<void>>& threads) {
   for (auto& t : threads) {
     t.get();
   }
@@ -503,15 +505,14 @@ void InsertOrderFragmenter::updateColumns(
 
   if (can_go_parallel) {
     const size_t num_worker_threads = cpu_threads();
-    std::vector<std::future<void>> worker_threads;
+    std::vector<utils::future<void>> worker_threads;
     for (size_t i = 0,
                 start_entry = 0,
                 stride = (num_entries + num_worker_threads - 1) / num_worker_threads;
          i < num_worker_threads && start_entry < num_entries;
          ++i, start_entry += stride) {
       const auto end_entry = std::min(start_entry + stride, num_rows);
-      worker_threads.push_back(std::async(
-          std::launch::async,
+      worker_threads.push_back(utils::async(
           [&row_converter](const size_t start, const size_t end) {
             for (size_t indexOfRow = start; indexOfRow < end; ++indexOfRow) {
               row_converter(indexOfRow);
@@ -610,7 +611,7 @@ void InsertOrderFragmenter::updateColumn(const Catalog_Namespace::Catalog* catal
   std::vector<int64_t> min_int64t_per_thread(ncore, std::numeric_limits<int64_t>::max());
 
   // parallel update elements
-  std::vector<std::future<void>> threads;
+  std::vector<utils::future<void>> threads;
 
   const auto segsz = (nrow + ncore - 1) / ncore;
   auto dbuf = chunk->getBuffer();
@@ -629,9 +630,7 @@ void InsertOrderFragmenter::updateColumn(const Catalog_Namespace::Catalog* catal
     updel_roll.dirtyChunkeys.insert(chunkey);
   }
   for (size_t rbegin = 0, c = 0; rbegin < nrow; ++c, rbegin += segsz) {
-    threads.emplace_back(std::async(
-        std::launch::async,
-        [=,
+    threads.emplace_back(utils::async([=,
          &has_null_per_thread,
          &min_int64t_per_thread,
          &max_int64t_per_thread,
@@ -1004,9 +1003,9 @@ const std::vector<uint64_t> InsertOrderFragmenter::getVacuumOffsets(
   const size_t segsz = (nrows_in_chunk + ncore - 1) / ncore;
   std::vector<std::vector<uint64_t>> deleted_offsets;
   deleted_offsets.resize(ncore);
-  std::vector<std::future<void>> threads;
+  std::vector<utils::future<void>> threads;
   for (size_t rbegin = 0; rbegin < nrows_in_chunk; rbegin += segsz) {
-    threads.emplace_back(std::async(std::launch::async, [=, &deleted_offsets] {
+    threads.emplace_back(utils::async([=, &deleted_offsets] {
       const auto rend = std::min<size_t>(rbegin + segsz, nrows_in_chunk);
       const auto ithread = rbegin / segsz;
       CHECK(ithread < deleted_offsets.size());
@@ -1174,7 +1173,7 @@ void InsertOrderFragmenter::compactRows(const Catalog_Namespace::Catalog* catalo
   std::vector<int64_t> min_int64t_per_thread(ncol, std::numeric_limits<uint64_t>::max());
 
   // parallel delete columns
-  std::vector<std::future<void>> threads;
+  std::vector<utils::future<void>> threads;
   auto nrows_to_vacuum = frag_offsets.size();
   auto nrows_in_fragment = fragment.getPhysicalNumTuples();
   auto nrows_to_keep = nrows_in_fragment - nrows_to_vacuum;
@@ -1250,9 +1249,9 @@ void InsertOrderFragmenter::compactRows(const Catalog_Namespace::Catalog* catalo
     };
 
     if (is_varlen) {
-      threads.emplace_back(std::async(std::launch::async, varlen_vacuum));
+      threads.emplace_back(utils::async(varlen_vacuum));
     } else {
-      threads.emplace_back(std::async(std::launch::async, fixlen_vacuum));
+      threads.emplace_back(utils::async(fixlen_vacuum));
     }
     if (threads.size() >= (size_t)cpu_threads()) {
       wait_cleanup_threads(threads);
