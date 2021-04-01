@@ -58,6 +58,17 @@ bool need_to_hold_chunk(const Chunk_NS::Chunk* chunk,
   return false;
 }
 
+bool need_to_hold_chunk(const std::list<std::shared_ptr<Chunk_NS::Chunk>>& chunks,
+                        const RelAlgExecutionUnit& ra_exe_unit) {
+  for (const auto& chunk : chunks) {
+    if (need_to_hold_chunk(chunk.get(), ra_exe_unit)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 }  // namespace
 
 const std::vector<uint64_t>& SharedKernelContext::getFragOffsets() {
@@ -150,38 +161,38 @@ void ExecutionKernel::runImpl(Executor* executor,
     device_allocator =
         std::make_unique<CudaAllocator>(&catalog->getDataMgr(), chosen_device_id);
   }
-  FetchResult fetch_result;
+  std::shared_ptr<FetchResult> fetch_result(new FetchResult);
   try {
     std::map<int, const TableFragments*> all_tables_fragments;
     QueryFragmentDescriptor::computeAllTablesFragments(
         all_tables_fragments, ra_exe_unit_, shared_context.getQueryInfos());
 
-    fetch_result = ra_exe_unit_.union_all
-                       ? executor->fetchUnionChunks(column_fetcher,
-                                                    ra_exe_unit_,
-                                                    chosen_device_id,
-                                                    memory_level,
-                                                    all_tables_fragments,
-                                                    frag_list,
-                                                    *catalog,
-                                                    *chunk_iterators_ptr,
-                                                    chunks,
-                                                    device_allocator.get(),
-                                                    thread_idx,
-                                                    eo.allow_runtime_query_interrupt)
-                       : executor->fetchChunks(column_fetcher,
-                                               ra_exe_unit_,
-                                               chosen_device_id,
-                                               memory_level,
-                                               all_tables_fragments,
-                                               frag_list,
-                                               *catalog,
-                                               *chunk_iterators_ptr,
-                                               chunks,
-                                               device_allocator.get(),
-                                               thread_idx,
-                                               eo.allow_runtime_query_interrupt);
-    if (fetch_result.num_rows.empty()) {
+    *fetch_result = ra_exe_unit_.union_all
+                        ? executor->fetchUnionChunks(column_fetcher,
+                                                     ra_exe_unit_,
+                                                     chosen_device_id,
+                                                     memory_level,
+                                                     all_tables_fragments,
+                                                     frag_list,
+                                                     *catalog,
+                                                     *chunk_iterators_ptr,
+                                                     chunks,
+                                                     device_allocator.get(),
+                                                     thread_idx,
+                                                     eo.allow_runtime_query_interrupt)
+                        : executor->fetchChunks(column_fetcher,
+                                                ra_exe_unit_,
+                                                chosen_device_id,
+                                                memory_level,
+                                                all_tables_fragments,
+                                                frag_list,
+                                                *catalog,
+                                                *chunk_iterators_ptr,
+                                                chunks,
+                                                device_allocator.get(),
+                                                thread_idx,
+                                                eo.allow_runtime_query_interrupt);
+    if (fetch_result->num_rows.empty()) {
       return;
     }
     if (eo.with_dynamic_watchdog &&
@@ -217,7 +228,7 @@ void ExecutionKernel::runImpl(Executor* executor,
         group_by_and_aggregate.initQueryMemoryDescriptor(false, 0, 8, nullptr, false);
     device_results_ = run_query_external(
         query,
-        fetch_result,
+        *fetch_result,
         executor->plan_state_.get(),
         ExternalQueryOutputSpec{
             *query_mem_desc,
@@ -234,8 +245,8 @@ void ExecutionKernel::runImpl(Executor* executor,
   if (kernel_dispatch_mode == ExecutorDispatchMode::KernelPerFragment &&
       query_mem_desc.getQueryDescriptionType() == QueryDescriptionType::Projection) {
     total_num_input_rows = 0;
-    std::for_each(fetch_result.num_rows.begin(),
-                  fetch_result.num_rows.end(),
+    std::for_each(fetch_result->num_rows.begin(),
+                  fetch_result->num_rows.end(),
                   [&total_num_input_rows](const std::vector<int64_t>& frag_row_count) {
                     total_num_input_rows = std::accumulate(frag_row_count.begin(),
                                                            frag_row_count.end(),
@@ -254,6 +265,59 @@ void ExecutionKernel::runImpl(Executor* executor,
     }
   }
 
+  uint32_t start_rowid{0};
+  if (rowid_lookup_key >= 0) {
+    if (!frag_list.empty()) {
+      const auto& all_frag_row_offsets = shared_context.getFragOffsets();
+      start_rowid = rowid_lookup_key -
+                    all_frag_row_offsets[frag_list.begin()->fragment_ids.front()];
+    }
+  }
+
+#ifdef HAVE_TBB
+  bool can_run_subkernels = shared_context.getThreadPool() != nullptr;
+
+  // Subfragments are supported for groupby queries and estimators only for now.
+  can_run_subkernels = can_run_subkernels &&
+                       (!ra_exe_unit_.groupby_exprs.empty() || ra_exe_unit_.estimator);
+
+  // In case some column is lazily fetched, we cannot mix different
+  // fragments in a single ResultSet.
+  can_run_subkernels =
+      can_run_subkernels && !executor->hasLazyFetchColumns(ra_exe_unit_.target_exprs);
+
+  // TODO: Use another structure to hold chunks. Currently,
+  // ResultSet holds them, but with subfragments chunk can
+  // be referenced by many ResultSets. So, some outer
+  // structure to hold all ResultSets and all chunks is
+  // required.
+  can_run_subkernels = can_run_subkernels && !need_to_hold_chunk(chunks, ra_exe_unit_);
+
+  // TODO: check for literals? We serialize literals before execution
+  // and hold them in result sets. Can we simply do it once and hold
+  // in an outer structure?
+
+  if (can_run_subkernels) {
+    size_t total_rows = fetch_result->num_rows[0][0];
+    size_t sub_size = g_subfragment_size;
+
+    for (size_t sub_start = start_rowid; sub_start < total_rows; sub_start += sub_size) {
+      sub_size = (sub_start + sub_size > total_rows) ? total_rows - sub_start : sub_size;
+      auto subtask = std::make_shared<KernelSubtask>(*this,
+                                                     shared_context,
+                                                     fetch_result,
+                                                     total_num_input_rows,
+                                                     sub_start,
+                                                     sub_size,
+                                                     thread_idx);
+      shared_context.getThreadPool()->spawn(
+          [subtask, executor] { subtask->run(executor); });
+    }
+
+    return;
+  }
+#endif  // HAVE_TBB
+
   if (eo.executor_type == ExecutorType::Native) {
     try {
       query_exe_context_owned =
@@ -263,8 +327,8 @@ void ExecutionKernel::runImpl(Executor* executor,
                                                   kernel_dispatch_mode,
                                                   chosen_device_id,
                                                   total_num_input_rows,
-                                                  fetch_result.col_buffers,
-                                                  fetch_result.frag_offsets,
+                                                  fetch_result->col_buffers,
+                                                  fetch_result->frag_offsets,
                                                   executor->getRowSetMemoryOwner(),
                                                   compilation_result.output_columnar,
                                                   query_mem_desc.sortOnGpu(),
@@ -277,26 +341,18 @@ void ExecutionKernel::runImpl(Executor* executor,
   QueryExecutionContext* query_exe_context{query_exe_context_owned.get()};
   CHECK(query_exe_context);
   int32_t err{0};
-  uint32_t start_rowid{0};
-  if (rowid_lookup_key >= 0) {
-    if (!frag_list.empty()) {
-      const auto& all_frag_row_offsets = shared_context.getFragOffsets();
-      start_rowid = rowid_lookup_key -
-                    all_frag_row_offsets[frag_list.begin()->fragment_ids.front()];
-    }
-  }
 
   if (ra_exe_unit_.groupby_exprs.empty()) {
     err = executor->executePlanWithoutGroupBy(ra_exe_unit_,
                                               compilation_result,
                                               query_comp_desc.hoistLiterals(),
-                                              device_results_,
+                                              &device_results_,
                                               ra_exe_unit_.target_exprs,
                                               chosen_device_type,
-                                              fetch_result.col_buffers,
+                                              fetch_result->col_buffers,
                                               query_exe_context,
-                                              fetch_result.num_rows,
-                                              fetch_result.frag_offsets,
+                                              fetch_result->num_rows,
+                                              fetch_result->frag_offsets,
                                               &catalog->getDataMgr(),
                                               chosen_device_id,
                                               start_rowid,
@@ -311,13 +367,13 @@ void ExecutionKernel::runImpl(Executor* executor,
     err = executor->executePlanWithGroupBy(ra_exe_unit_,
                                            compilation_result,
                                            query_comp_desc.hoistLiterals(),
-                                           device_results_,
+                                           &device_results_,
                                            chosen_device_type,
-                                           fetch_result.col_buffers,
+                                           fetch_result->col_buffers,
                                            outer_tab_frag_ids,
                                            query_exe_context,
-                                           fetch_result.num_rows,
-                                           fetch_result.frag_offsets,
+                                           fetch_result->num_rows,
+                                           fetch_result->frag_offsets,
                                            &catalog->getDataMgr(),
                                            chosen_device_id,
                                            outer_table_id,
@@ -344,3 +400,100 @@ void ExecutionKernel::runImpl(Executor* executor,
   }
   shared_context.addDeviceResults(std::move(device_results_), outer_tab_frag_ids);
 }
+
+#ifdef HAVE_TBB
+
+void KernelSubtask::run(Executor* executor) {
+  auto& query_exe_context_owned = shared_context_.getTlsExecutionContext().local();
+  const bool do_render =
+      kernel_.render_info_ && kernel_.render_info_->isPotentialInSituRender();
+  const CompilationResult& compilation_result =
+      kernel_.query_comp_desc.getCompilationResult();
+
+  if (!query_exe_context_owned) {
+    try {
+      // We pass fake col_buffers and frag_offsets. These are not actually used
+      // for subtasks but shouldn't pass empty structures to avoid empty results.
+      std::vector<std::vector<const int8_t*>> col_buffers(
+          fetch_result_->col_buffers.size(),
+          std::vector<const int8_t*>(fetch_result_->col_buffers[0].size()));
+      std::vector<std::vector<uint64_t>> frag_offsets(
+          fetch_result_->frag_offsets.size(),
+          std::vector<uint64_t>(fetch_result_->frag_offsets[0].size()));
+      query_exe_context_owned = kernel_.query_mem_desc.getQueryExecutionContext(
+          kernel_.ra_exe_unit_,
+          executor,
+          kernel_.chosen_device_type,
+          kernel_.kernel_dispatch_mode,
+          kernel_.chosen_device_id,
+          total_num_input_rows_,
+          col_buffers,
+          frag_offsets,
+          executor->getRowSetMemoryOwner(),
+          compilation_result.output_columnar,
+          kernel_.query_mem_desc.sortOnGpu(),
+          // TODO: use TBB thread id to choose allocator
+          thread_idx_,
+          do_render ? kernel_.render_info_ : nullptr);
+    } catch (const OutOfHostMemory& e) {
+      throw QueryExecutionError(Executor::ERR_OUT_OF_CPU_MEM);
+    }
+  }
+
+  const int outer_table_id = kernel_.ra_exe_unit_.union_all
+                                 ? kernel_.frag_list[0].table_id
+                                 : kernel_.ra_exe_unit_.input_descs[0].getTableId();
+  const auto& outer_tab_frag_ids = kernel_.frag_list[0].fragment_ids;
+  auto catalog = executor->getCatalog();
+  CHECK(catalog);
+  QueryExecutionContext* query_exe_context{query_exe_context_owned.get()};
+  CHECK(query_exe_context);
+  int32_t err{0};
+
+  // ResultSetPtr results;
+  if (kernel_.ra_exe_unit_.groupby_exprs.empty()) {
+    err = executor->executePlanWithoutGroupBy(kernel_.ra_exe_unit_,
+                                              compilation_result,
+                                              kernel_.query_comp_desc.hoistLiterals(),
+                                              nullptr,
+                                              kernel_.ra_exe_unit_.target_exprs,
+                                              kernel_.chosen_device_type,
+                                              fetch_result_->col_buffers,
+                                              query_exe_context,
+                                              fetch_result_->num_rows,
+                                              fetch_result_->frag_offsets,
+                                              &catalog->getDataMgr(),
+                                              kernel_.chosen_device_id,
+                                              start_rowid_,
+                                              kernel_.ra_exe_unit_.input_descs.size(),
+                                              kernel_.eo.allow_runtime_query_interrupt,
+                                              do_render ? kernel_.render_info_ : nullptr,
+                                              start_rowid_ + num_rows_);
+  } else {
+    err = executor->executePlanWithGroupBy(kernel_.ra_exe_unit_,
+                                           compilation_result,
+                                           kernel_.query_comp_desc.hoistLiterals(),
+                                           nullptr,
+                                           kernel_.chosen_device_type,
+                                           fetch_result_->col_buffers,
+                                           outer_tab_frag_ids,
+                                           query_exe_context,
+                                           fetch_result_->num_rows,
+                                           fetch_result_->frag_offsets,
+                                           &catalog->getDataMgr(),
+                                           kernel_.chosen_device_id,
+                                           outer_table_id,
+                                           kernel_.ra_exe_unit_.scan_limit,
+                                           start_rowid_,
+                                           kernel_.ra_exe_unit_.input_descs.size(),
+                                           kernel_.eo.allow_runtime_query_interrupt,
+                                           do_render ? kernel_.render_info_ : nullptr,
+                                           start_rowid_ + num_rows_);
+  }
+
+  if (err) {
+    throw QueryExecutionError(err);
+  }
+}
+
+#endif  // HAVE_TBB
