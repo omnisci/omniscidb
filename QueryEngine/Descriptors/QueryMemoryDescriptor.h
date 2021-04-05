@@ -296,6 +296,8 @@ class QueryMemoryDescriptor {
   bool blocksShareMemory() const;
   bool threadsShareMemory() const;
 
+  bool cpuThreadsShareMemory() const;
+
   bool lazyInitGroups(const ExecutorDeviceType) const;
 
   bool interleavedBins(const ExecutorDeviceType) const;

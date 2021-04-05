@@ -200,3 +200,4 @@ extern bool g_enable_filter_function;
 extern size_t g_max_import_threads;
 extern bool g_enable_auto_metadata_update;
 extern bool g_read_only;
+extern bool g_enable_cpu_shmem;

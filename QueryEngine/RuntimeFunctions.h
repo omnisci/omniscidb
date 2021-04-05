@@ -27,6 +27,8 @@
 
 extern "C" int64_t agg_sum(int64_t* agg, const int64_t val);
 
+extern "C" int64_t agg_sum_cpu_shared(int64_t* agg, const int64_t val);
+
 extern "C" void agg_max(int64_t* agg, const int64_t val);
 
 extern "C" void agg_min(int64_t* agg, const int64_t val);

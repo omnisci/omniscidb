@@ -301,6 +301,26 @@ void ExecutionKernel::runImpl(Executor* executor,
     size_t total_rows = fetch_result->num_rows[0][0];
     size_t sub_size = g_subfragment_size;
 
+    if (query_mem_desc.cpuThreadsShareMemory()) {
+      std::lock_guard<std::mutex> lock(shared_context.getSharedExecutionContextMutex());
+      if (!shared_context.getSharedExecutionContext()) {
+        shared_context.setSharedExecutionContext(
+            query_mem_desc.getQueryExecutionContext(ra_exe_unit_,
+                                                    executor,
+                                                    chosen_device_type,
+                                                    kernel_dispatch_mode,
+                                                    chosen_device_id,
+                                                    total_num_input_rows,
+                                                    fetch_result->col_buffers,
+                                                    fetch_result->frag_offsets,
+                                                    executor->getRowSetMemoryOwner(),
+                                                    compilation_result.output_columnar,
+                                                    query_mem_desc.sortOnGpu(),
+                                                    thread_idx,
+                                                    do_render ? render_info_ : nullptr));
+      }
+    }
+
     for (size_t sub_start = start_rowid; sub_start < total_rows; sub_start += sub_size) {
       sub_size = (sub_start + sub_size > total_rows) ? total_rows - sub_start : sub_size;
       auto subtask = std::make_shared<KernelSubtask>(*this,
@@ -404,40 +424,44 @@ void ExecutionKernel::runImpl(Executor* executor,
 #ifdef HAVE_TBB
 
 void KernelSubtask::run(Executor* executor) {
-  auto& query_exe_context_owned = shared_context_.getTlsExecutionContext().local();
+  QueryExecutionContext* query_exe_context = shared_context_.getSharedExecutionContext();
   const bool do_render =
       kernel_.render_info_ && kernel_.render_info_->isPotentialInSituRender();
   const CompilationResult& compilation_result =
       kernel_.query_comp_desc.getCompilationResult();
 
-  if (!query_exe_context_owned) {
-    try {
-      // We pass fake col_buffers and frag_offsets. These are not actually used
-      // for subtasks but shouldn't pass empty structures to avoid empty results.
-      std::vector<std::vector<const int8_t*>> col_buffers(
-          fetch_result_->col_buffers.size(),
-          std::vector<const int8_t*>(fetch_result_->col_buffers[0].size()));
-      std::vector<std::vector<uint64_t>> frag_offsets(
-          fetch_result_->frag_offsets.size(),
-          std::vector<uint64_t>(fetch_result_->frag_offsets[0].size()));
-      query_exe_context_owned = kernel_.query_mem_desc.getQueryExecutionContext(
-          kernel_.ra_exe_unit_,
-          executor,
-          kernel_.chosen_device_type,
-          kernel_.kernel_dispatch_mode,
-          kernel_.chosen_device_id,
-          total_num_input_rows_,
-          col_buffers,
-          frag_offsets,
-          executor->getRowSetMemoryOwner(),
-          compilation_result.output_columnar,
-          kernel_.query_mem_desc.sortOnGpu(),
-          // TODO: use TBB thread id to choose allocator
-          thread_idx_,
-          do_render ? kernel_.render_info_ : nullptr);
-    } catch (const OutOfHostMemory& e) {
-      throw QueryExecutionError(Executor::ERR_OUT_OF_CPU_MEM);
+  if (!query_exe_context) {
+    auto& query_exe_context_owned = shared_context_.getTlsExecutionContext().local();
+    if (!query_exe_context_owned) {
+      try {
+        // We pass fake col_buffers and frag_offsets. These are not actually used
+        // for subtasks but shouldn't pass empty structures to avoid empty results.
+        std::vector<std::vector<const int8_t*>> col_buffers(
+            fetch_result_->col_buffers.size(),
+            std::vector<const int8_t*>(fetch_result_->col_buffers[0].size()));
+        std::vector<std::vector<uint64_t>> frag_offsets(
+            fetch_result_->frag_offsets.size(),
+            std::vector<uint64_t>(fetch_result_->frag_offsets[0].size()));
+        query_exe_context_owned = kernel_.query_mem_desc.getQueryExecutionContext(
+            kernel_.ra_exe_unit_,
+            executor,
+            kernel_.chosen_device_type,
+            kernel_.kernel_dispatch_mode,
+            kernel_.chosen_device_id,
+            total_num_input_rows_,
+            col_buffers,
+            frag_offsets,
+            executor->getRowSetMemoryOwner(),
+            compilation_result.output_columnar,
+            kernel_.query_mem_desc.sortOnGpu(),
+            // TODO: use TBB thread id to choose allocator
+            thread_idx_,
+            do_render ? kernel_.render_info_ : nullptr);
+      } catch (const OutOfHostMemory& e) {
+        throw QueryExecutionError(Executor::ERR_OUT_OF_CPU_MEM);
+      }
     }
+    query_exe_context = query_exe_context_owned.get();
   }
 
   const int outer_table_id = kernel_.ra_exe_unit_.union_all
@@ -446,7 +470,6 @@ void KernelSubtask::run(Executor* executor) {
   const auto& outer_tab_frag_ids = kernel_.frag_list[0].fragment_ids;
   auto catalog = executor->getCatalog();
   CHECK(catalog);
-  QueryExecutionContext* query_exe_context{query_exe_context_owned.get()};
   CHECK(query_exe_context);
   int32_t err{0};
 

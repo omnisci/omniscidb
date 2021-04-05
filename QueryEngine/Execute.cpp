@@ -135,6 +135,7 @@ bool g_is_test_env{false};  // operating under a unit test environment. Currentl
 
 size_t g_approx_quantile_buffer{1000};
 size_t g_approx_quantile_centroids{300};
+bool g_enable_cpu_shmem{false};
 
 extern bool g_cache_string_hash;
 
@@ -2242,6 +2243,11 @@ void Executor::launchKernels(SharedKernelContext& shared_context,
       }
       shared_context.addDeviceResults(std::move(results), {});
     }
+  }
+  if (shared_context.getSharedExecutionContext()) {
+    auto results = shared_context.getSharedExecutionContext()->getRowSet(
+        *ra_exe_unit, shared_context.getSharedExecutionContext()->query_mem_desc_);
+    shared_context.addDeviceResults(std::move(results), {});
   }
 }
 

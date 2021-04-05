@@ -27,6 +27,7 @@
 
 bool g_enable_smem_group_by{true};
 extern bool g_enable_columnar_output;
+extern bool g_enable_cpu_shmem;
 
 namespace {
 
@@ -1019,6 +1020,11 @@ bool QueryMemoryDescriptor::usesGetGroupValueFast() const {
 
 bool QueryMemoryDescriptor::threadsShareMemory() const {
   return query_desc_type_ != QueryDescriptionType::NonGroupedAggregate;
+}
+
+bool QueryMemoryDescriptor::cpuThreadsShareMemory() const {
+  return g_enable_cpu_shmem &&
+         query_desc_type_ == QueryDescriptionType::GroupByPerfectHash && keyless_hash_;
 }
 
 bool QueryMemoryDescriptor::blocksShareMemory() const {

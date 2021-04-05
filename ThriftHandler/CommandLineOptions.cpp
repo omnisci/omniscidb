@@ -732,6 +732,11 @@ void CommandLineOptions::fillAdvancedOptions() {
       po::value<size_t>(&g_parallel_top_max)->default_value(g_parallel_top_max),
       "For ResultSets requiring a heap sort, the maximum number of rows allowed by "
       "watchdog.");
+  developer_desc.add_options()("enable-cpu-shmem",
+                               po::value<bool>(&g_enable_cpu_shmem)
+                                   ->default_value(g_enable_cpu_shmem)
+                                   ->implicit_value(true),
+                               "Enable shared execution context for CPU code.");
 }
 
 namespace {
