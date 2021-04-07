@@ -444,6 +444,9 @@ void TargetExprCodegen::codegenAggregate(
           if (needs_unnest_double_patch) {
             agg_fname = patch_agg_fname(agg_fname);
           }
+        } else if (co.device_type == ExecutorDeviceType::CPU &&
+                   query_mem_desc.cpuThreadsShareMemory()) {
+          agg_fname += "_cpu_shared";
         }
         auto agg_fname_call_ret_lv = group_by_and_agg->emitCall(agg_fname, agg_args);
 

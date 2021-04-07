@@ -299,6 +299,10 @@ extern "C" ALWAYS_INLINE uint64_t agg_count(uint64_t* agg, const int64_t) {
   return (*agg)++;
 }
 
+extern "C" ALWAYS_INLINE uint64_t agg_count_cpu_shared(uint64_t* agg, const int64_t) {
+  return __atomic_fetch_add(agg, (uint64_t)1, __ATOMIC_ACQ_REL);
+}
+
 extern "C" ALWAYS_INLINE void agg_count_distinct_bitmap(int64_t* agg,
                                                         const int64_t val,
                                                         const int64_t min_val) {
@@ -364,15 +368,53 @@ extern "C" ALWAYS_INLINE int64_t agg_sum(int64_t* agg, const int64_t val) {
   return old;
 }
 
+extern "C" ALWAYS_INLINE int64_t agg_sum_cpu_shared(int64_t* agg, const int64_t val) {
+  return __atomic_fetch_add(agg, val, __ATOMIC_ACQ_REL);
+}
+
 extern "C" ALWAYS_INLINE void agg_max(int64_t* agg, const int64_t val) {
   *agg = std::max(*agg, val);
+}
+
+extern "C" ALWAYS_INLINE void agg_max_cpu_shared(int64_t* agg, const int64_t val) {
+  int64_t old_agg;
+  do {
+    __atomic_load(agg, &old_agg, __ATOMIC_ACQUIRE);
+    if (old_agg >= val) {
+      break;
+    }
+  } while (!__atomic_compare_exchange(agg,
+                                      &old_agg,
+                                      const_cast<int64_t*>(&val),
+                                      false,
+                                      __ATOMIC_ACQUIRE,
+                                      __ATOMIC_ACQ_REL));
 }
 
 extern "C" ALWAYS_INLINE void agg_min(int64_t* agg, const int64_t val) {
   *agg = std::min(*agg, val);
 }
 
+extern "C" ALWAYS_INLINE void agg_min_cpu_shared(int64_t* agg, const int64_t val) {
+  int64_t old_agg;
+  do {
+    __atomic_load(agg, &old_agg, __ATOMIC_ACQUIRE);
+    if (old_agg <= val) {
+      break;
+    }
+  } while (!__atomic_compare_exchange(agg,
+                                      &old_agg,
+                                      const_cast<int64_t*>(&val),
+                                      false,
+                                      __ATOMIC_ACQUIRE,
+                                      __ATOMIC_ACQ_REL));
+}
+
 extern "C" ALWAYS_INLINE void agg_id(int64_t* agg, const int64_t val) {
+  *agg = val;
+}
+
+extern "C" ALWAYS_INLINE void agg_id_cpu_shared(int64_t* agg, const int64_t val) {
   *agg = val;
 }
 
@@ -416,15 +458,41 @@ extern "C" ALWAYS_INLINE uint32_t agg_count_int32(uint32_t* agg, const int32_t) 
   return (*agg)++;
 }
 
+extern "C" ALWAYS_INLINE uint32_t agg_count_int32_cpu_shared(uint32_t* agg,
+                                                             const int32_t) {
+  return __atomic_fetch_add(agg, (uint32_t)1, __ATOMIC_ACQ_REL);
+}
+
 extern "C" ALWAYS_INLINE int32_t agg_sum_int32(int32_t* agg, const int32_t val) {
   const auto old = *agg;
   *agg += val;
   return old;
 }
 
+extern "C" ALWAYS_INLINE int32_t agg_sum_int32_cpu_shared(int32_t* agg,
+                                                          const int32_t val) {
+  return __atomic_fetch_add(agg, val, __ATOMIC_ACQ_REL);
+}
+
 #define DEF_AGG_MAX_INT(n)                                                              \
   extern "C" ALWAYS_INLINE void agg_max_int##n(int##n##_t* agg, const int##n##_t val) { \
     *agg = std::max(*agg, val);                                                         \
+  }                                                                                     \
+                                                                                        \
+  extern "C" ALWAYS_INLINE void agg_max_int##n##_cpu_shared(int##n##_t* agg,            \
+                                                            const int##n##_t val) {     \
+    int##n##_t old_agg;                                                                 \
+    do {                                                                                \
+      __atomic_load(agg, &old_agg, __ATOMIC_ACQUIRE);                                   \
+      if (old_agg >= val) {                                                             \
+        break;                                                                          \
+      }                                                                                 \
+    } while (!__atomic_compare_exchange(agg,                                            \
+                                        &old_agg,                                       \
+                                        const_cast<int##n##_t*>(&val),                  \
+                                        false,                                          \
+                                        __ATOMIC_ACQUIRE,                               \
+                                        __ATOMIC_ACQ_REL));                             \
   }
 
 DEF_AGG_MAX_INT(32)
@@ -435,6 +503,22 @@ DEF_AGG_MAX_INT(8)
 #define DEF_AGG_MIN_INT(n)                                                              \
   extern "C" ALWAYS_INLINE void agg_min_int##n(int##n##_t* agg, const int##n##_t val) { \
     *agg = std::min(*agg, val);                                                         \
+  }                                                                                     \
+                                                                                        \
+  extern "C" ALWAYS_INLINE void agg_min_int##n##_cpu_shared(int##n##_t* agg,            \
+                                                            const int##n##_t val) {     \
+    int##n##_t old_agg;                                                                 \
+    do {                                                                                \
+      __atomic_load(agg, &old_agg, __ATOMIC_ACQUIRE);                                   \
+      if (old_agg <= val) {                                                             \
+        break;                                                                          \
+      }                                                                                 \
+    } while (!__atomic_compare_exchange(agg,                                            \
+                                        &old_agg,                                       \
+                                        const_cast<int##n##_t*>(&val),                  \
+                                        false,                                          \
+                                        __ATOMIC_ACQUIRE,                               \
+                                        __ATOMIC_ACQ_REL));                             \
   }
 
 DEF_AGG_MIN_INT(32)
@@ -445,6 +529,11 @@ DEF_AGG_MIN_INT(8)
 #define DEF_AGG_ID_INT(n)                                                              \
   extern "C" ALWAYS_INLINE void agg_id_int##n(int##n##_t* agg, const int##n##_t val) { \
     *agg = val;                                                                        \
+  }                                                                                    \
+                                                                                       \
+  extern "C" ALWAYS_INLINE void agg_id_int##n##_cpu_shared(int##n##_t* agg,            \
+                                                           const int##n##_t val) {     \
+    __atomic_store(agg, const_cast<int##n##_t*>(&val), __ATOMIC_RELEASE);              \
   }
 
 #define DEF_CHECKED_SINGLE_AGG_ID_INT(n)                                  \
@@ -501,6 +590,26 @@ extern "C" ALWAYS_INLINE int64_t agg_sum_skip_val(int64_t* agg,
   return old;
 }
 
+extern "C" ALWAYS_INLINE int64_t agg_sum_skip_val_cpu_shared(int64_t* agg,
+                                                             const int64_t val,
+                                                             const int64_t skip_val) {
+  if (val != skip_val) {
+    if (__atomic_compare_exchange(agg,
+                                  const_cast<int64_t*>(&skip_val),
+                                  const_cast<int64_t*>(&val),
+                                  false,
+                                  __ATOMIC_ACQ_REL,
+                                  __ATOMIC_ACQUIRE)) {
+      return skip_val;
+    }
+
+    return agg_sum_cpu_shared(agg, val);
+  }
+  int64_t old;
+  __atomic_load(agg, &old, __ATOMIC_ACQUIRE);
+  return old;
+}
+
 extern "C" ALWAYS_INLINE int32_t agg_sum_int32_skip_val(int32_t* agg,
                                                         const int32_t val,
                                                         const int32_t skip_val) {
@@ -515,6 +624,27 @@ extern "C" ALWAYS_INLINE int32_t agg_sum_int32_skip_val(int32_t* agg,
   return old;
 }
 
+extern "C" ALWAYS_INLINE int32_t
+agg_sum_int32_skip_val_cpu_shared(int32_t* agg,
+                                  const int32_t val,
+                                  const int32_t skip_val) {
+  if (val != skip_val) {
+    if (__atomic_compare_exchange(agg,
+                                  const_cast<int32_t*>(&skip_val),
+                                  const_cast<int32_t*>(&val),
+                                  false,
+                                  __ATOMIC_ACQUIRE,
+                                  __ATOMIC_ACQ_REL)) {
+      return skip_val;
+    }
+
+    return agg_sum_int32_cpu_shared(agg, val);
+  }
+  int32_t old;
+  __atomic_load(agg, &old, __ATOMIC_ACQUIRE);
+  return old;
+}
+
 extern "C" ALWAYS_INLINE uint64_t agg_count_skip_val(uint64_t* agg,
                                                      const int64_t val,
                                                      const int64_t skip_val) {
@@ -522,6 +652,17 @@ extern "C" ALWAYS_INLINE uint64_t agg_count_skip_val(uint64_t* agg,
     return agg_count(agg, val);
   }
   return *agg;
+}
+
+extern "C" ALWAYS_INLINE uint64_t agg_count_skip_val_cpu_shared(uint64_t* agg,
+                                                                const int64_t val,
+                                                                const int64_t skip_val) {
+  if (val != skip_val) {
+    return agg_count_cpu_shared(agg, val);
+  }
+  int64_t old;
+  __atomic_load(reinterpret_cast<int64_t*>(agg), &old, __ATOMIC_ACQUIRE);
+  return old;
 }
 
 extern "C" ALWAYS_INLINE uint32_t agg_count_int32_skip_val(uint32_t* agg,
@@ -533,6 +674,18 @@ extern "C" ALWAYS_INLINE uint32_t agg_count_int32_skip_val(uint32_t* agg,
   return *agg;
 }
 
+extern "C" ALWAYS_INLINE uint32_t
+agg_count_int32_skip_val_cpu_shared(uint32_t* agg,
+                                    const int32_t val,
+                                    const int32_t skip_val) {
+  if (val != skip_val) {
+    return agg_count_int32_cpu_shared(agg, val);
+  }
+  int32_t old;
+  __atomic_load(reinterpret_cast<int32_t*>(agg), &old, __ATOMIC_ACQUIRE);
+  return old;
+}
+
 #define DEF_SKIP_AGG_ADD(base_agg_func)                       \
   extern "C" ALWAYS_INLINE void base_agg_func##_skip_val(     \
       DATA_T* agg, const DATA_T val, const DATA_T skip_val) { \
@@ -541,17 +694,31 @@ extern "C" ALWAYS_INLINE uint32_t agg_count_int32_skip_val(uint32_t* agg,
     }                                                         \
   }
 
-#define DEF_SKIP_AGG(base_agg_func)                           \
-  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val(     \
-      DATA_T* agg, const DATA_T val, const DATA_T skip_val) { \
-    if (val != skip_val) {                                    \
-      const DATA_T old_agg = *agg;                            \
-      if (old_agg != skip_val) {                              \
-        base_agg_func(agg, val);                              \
-      } else {                                                \
-        *agg = val;                                           \
-      }                                                       \
-    }                                                         \
+#define DEF_SKIP_AGG(base_agg_func)                                  \
+  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val(            \
+      DATA_T* agg, const DATA_T val, const DATA_T skip_val) {        \
+    if (val != skip_val) {                                           \
+      const DATA_T old_agg = *agg;                                   \
+      if (old_agg != skip_val) {                                     \
+        base_agg_func(agg, val);                                     \
+      } else {                                                       \
+        *agg = val;                                                  \
+      }                                                              \
+    }                                                                \
+  }                                                                  \
+                                                                     \
+  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val_cpu_shared( \
+      DATA_T* agg, const DATA_T val, const DATA_T skip_val) {        \
+    if (val != skip_val) {                                           \
+      if (!__atomic_compare_exchange(agg,                            \
+                                     const_cast<DATA_T*>(&skip_val), \
+                                     const_cast<DATA_T*>(&val),      \
+                                     false,                          \
+                                     __ATOMIC_ACQ_REL,               \
+                                     __ATOMIC_ACQUIRE)) {            \
+        base_agg_func##_cpu_shared(agg, val);                        \
+      }                                                              \
+    }                                                                \
   }
 
 #define DATA_T int64_t
@@ -583,9 +750,28 @@ extern "C" ALWAYS_INLINE uint64_t agg_count_double(uint64_t* agg, const double v
   return (*agg)++;
 }
 
+extern "C" ALWAYS_INLINE uint64_t agg_count_double_cpu_shared(uint64_t* agg,
+                                                              const double val) {
+  return __atomic_fetch_add(agg, (uint64_t)1, __ATOMIC_ACQ_REL);
+}
+
 extern "C" ALWAYS_INLINE void agg_sum_double(int64_t* agg, const double val) {
   const auto r = *reinterpret_cast<const double*>(agg) + val;
   *agg = *reinterpret_cast<const int64_t*>(may_alias_ptr(&r));
+}
+
+extern "C" ALWAYS_INLINE void agg_sum_double_cpu_shared(int64_t* agg, const double val) {
+  double old_agg;
+  double new_agg;
+  do {
+    __atomic_load(reinterpret_cast<double*>(agg), &old_agg, __ATOMIC_ACQUIRE);
+    new_agg = old_agg + val;
+  } while (!__atomic_compare_exchange(agg,
+                                      reinterpret_cast<int64_t*>(&old_agg),
+                                      reinterpret_cast<int64_t*>(&new_agg),
+                                      false,
+                                      __ATOMIC_ACQUIRE,
+                                      __ATOMIC_ACQ_REL));
 }
 
 extern "C" ALWAYS_INLINE void agg_max_double(int64_t* agg, const double val) {
@@ -593,13 +779,51 @@ extern "C" ALWAYS_INLINE void agg_max_double(int64_t* agg, const double val) {
   *agg = *(reinterpret_cast<const int64_t*>(may_alias_ptr(&r)));
 }
 
+extern "C" ALWAYS_INLINE void agg_max_double_cpu_shared(int64_t* agg, const double val) {
+  double old_agg;
+  do {
+    __atomic_load(reinterpret_cast<double*>(agg), &old_agg, __ATOMIC_ACQUIRE);
+    if (old_agg >= val) {
+      break;
+    }
+  } while (
+      !__atomic_compare_exchange(agg,
+                                 reinterpret_cast<int64_t*>(&old_agg),
+                                 reinterpret_cast<int64_t*>(const_cast<double*>(&val)),
+                                 false,
+                                 __ATOMIC_ACQUIRE,
+                                 __ATOMIC_ACQ_REL));
+}
+
 extern "C" ALWAYS_INLINE void agg_min_double(int64_t* agg, const double val) {
   const auto r = std::min(*reinterpret_cast<const double*>(agg), val);
   *agg = *(reinterpret_cast<const int64_t*>(may_alias_ptr(&r)));
 }
 
+extern "C" ALWAYS_INLINE void agg_min_double_cpu_shared(int64_t* agg, const double val) {
+  double old_agg;
+  do {
+    __atomic_load(reinterpret_cast<double*>(agg), &old_agg, __ATOMIC_ACQUIRE);
+    if (old_agg <= val) {
+      break;
+    }
+  } while (
+      !__atomic_compare_exchange(agg,
+                                 reinterpret_cast<int64_t*>(&old_agg),
+                                 reinterpret_cast<int64_t*>(const_cast<double*>(&val)),
+                                 false,
+                                 __ATOMIC_ACQUIRE,
+                                 __ATOMIC_ACQ_REL));
+}
+
 extern "C" ALWAYS_INLINE void agg_id_double(int64_t* agg, const double val) {
   *agg = *(reinterpret_cast<const int64_t*>(may_alias_ptr(&val)));
+}
+
+extern "C" ALWAYS_INLINE void agg_id_double_cpu_shared(int64_t* agg, const double val) {
+  __atomic_store(agg,
+                 reinterpret_cast<int64_t*>(may_alias_ptr(const_cast<double*>(&val))),
+                 __ATOMIC_RELEASE);
 }
 
 extern "C" ALWAYS_INLINE int32_t checked_single_agg_id_double(int64_t* agg,
@@ -624,9 +848,28 @@ extern "C" ALWAYS_INLINE uint32_t agg_count_float(uint32_t* agg, const float val
   return (*agg)++;
 }
 
+extern "C" ALWAYS_INLINE uint32_t agg_count_float_cpu_shared(uint32_t* agg,
+                                                             const float val) {
+  return __atomic_fetch_add(agg, (uint32_t)1, __ATOMIC_ACQ_REL);
+}
+
 extern "C" ALWAYS_INLINE void agg_sum_float(int32_t* agg, const float val) {
   const auto r = *reinterpret_cast<const float*>(agg) + val;
   *agg = *reinterpret_cast<const int32_t*>(may_alias_ptr(&r));
+}
+
+extern "C" ALWAYS_INLINE void agg_sum_float_cpu_shared(int32_t* agg, const float val) {
+  float old_agg;
+  float new_agg;
+  do {
+    __atomic_load(reinterpret_cast<float*>(agg), &old_agg, __ATOMIC_ACQUIRE);
+    new_agg = old_agg + val;
+  } while (!__atomic_compare_exchange(agg,
+                                      reinterpret_cast<int32_t*>(&old_agg),
+                                      reinterpret_cast<int32_t*>(&new_agg),
+                                      false,
+                                      __ATOMIC_ACQUIRE,
+                                      __ATOMIC_ACQ_REL));
 }
 
 extern "C" ALWAYS_INLINE void agg_max_float(int32_t* agg, const float val) {
@@ -634,13 +877,51 @@ extern "C" ALWAYS_INLINE void agg_max_float(int32_t* agg, const float val) {
   *agg = *(reinterpret_cast<const int32_t*>(may_alias_ptr(&r)));
 }
 
+extern "C" ALWAYS_INLINE void agg_max_float_cpu_shared(int32_t* agg, const float val) {
+  float old_agg;
+  do {
+    __atomic_load(reinterpret_cast<float*>(agg), &old_agg, __ATOMIC_ACQUIRE);
+    if (old_agg >= val) {
+      break;
+    }
+  } while (
+      !__atomic_compare_exchange(agg,
+                                 reinterpret_cast<int32_t*>(&old_agg),
+                                 reinterpret_cast<int32_t*>(const_cast<float*>(&val)),
+                                 false,
+                                 __ATOMIC_ACQUIRE,
+                                 __ATOMIC_ACQ_REL));
+}
+
 extern "C" ALWAYS_INLINE void agg_min_float(int32_t* agg, const float val) {
   const auto r = std::min(*reinterpret_cast<const float*>(agg), val);
   *agg = *(reinterpret_cast<const int32_t*>(may_alias_ptr(&r)));
 }
 
+extern "C" ALWAYS_INLINE void agg_min_float_cpu_shared(int32_t* agg, const float val) {
+  float old_agg;
+  do {
+    __atomic_load(reinterpret_cast<float*>(agg), &old_agg, __ATOMIC_ACQUIRE);
+    if (old_agg <= val) {
+      break;
+    }
+  } while (
+      !__atomic_compare_exchange(agg,
+                                 reinterpret_cast<int32_t*>(&old_agg),
+                                 reinterpret_cast<int32_t*>(const_cast<float*>(&val)),
+                                 false,
+                                 __ATOMIC_ACQUIRE,
+                                 __ATOMIC_ACQ_REL));
+}
+
 extern "C" ALWAYS_INLINE void agg_id_float(int32_t* agg, const float val) {
   *agg = *(reinterpret_cast<const int32_t*>(may_alias_ptr(&val)));
+}
+
+extern "C" ALWAYS_INLINE void agg_id_float_cpu_shared(int32_t* agg, const float val) {
+  __atomic_store(agg,
+                 reinterpret_cast<int32_t*>(may_alias_ptr(const_cast<float*>(&val))),
+                 __ATOMIC_RELEASE);
 }
 
 extern "C" ALWAYS_INLINE int32_t checked_single_agg_id_float(int32_t* agg,
@@ -670,6 +951,18 @@ extern "C" ALWAYS_INLINE uint64_t agg_count_double_skip_val(uint64_t* agg,
   return *agg;
 }
 
+extern "C" ALWAYS_INLINE uint64_t
+agg_count_double_skip_val_cpu_shared(uint64_t* agg,
+                                     const double val,
+                                     const double skip_val) {
+  if (val != skip_val) {
+    return agg_count_double_cpu_shared(agg, val);
+  }
+  uint64_t old;
+  __atomic_load(agg, &old, __ATOMIC_ACQUIRE);
+  return old;
+}
+
 extern "C" ALWAYS_INLINE uint32_t agg_count_float_skip_val(uint32_t* agg,
                                                            const float val,
                                                            const float skip_val) {
@@ -679,25 +972,59 @@ extern "C" ALWAYS_INLINE uint32_t agg_count_float_skip_val(uint32_t* agg,
   return *agg;
 }
 
-#define DEF_SKIP_AGG_ADD(base_agg_func)                       \
-  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val(     \
-      ADDR_T* agg, const DATA_T val, const DATA_T skip_val) { \
-    if (val != skip_val) {                                    \
-      base_agg_func(agg, val);                                \
-    }                                                         \
+extern "C" ALWAYS_INLINE uint32_t
+agg_count_float_skip_val_cpu_shared(uint32_t* agg,
+                                    const float val,
+                                    const float skip_val) {
+  if (val != skip_val) {
+    return agg_count_float_cpu_shared(agg, val);
+  }
+  uint32_t old;
+  __atomic_load(agg, &old, __ATOMIC_ACQUIRE);
+  return old;
+}
+
+#define DEF_SKIP_AGG_ADD(base_agg_func)                              \
+  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val(            \
+      ADDR_T* agg, const DATA_T val, const DATA_T skip_val) {        \
+    if (val != skip_val) {                                           \
+      base_agg_func(agg, val);                                       \
+    }                                                                \
+  }                                                                  \
+                                                                     \
+  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val_cpu_shared( \
+      ADDR_T* agg, const DATA_T val, const DATA_T skip_val) {        \
+    if (val != skip_val) {                                           \
+      base_agg_func##_cpu_shared(agg, val);                          \
+    }                                                                \
   }
 
-#define DEF_SKIP_AGG(base_agg_func)                                                \
-  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val(                          \
-      ADDR_T* agg, const DATA_T val, const DATA_T skip_val) {                      \
-    if (val != skip_val) {                                                         \
-      const ADDR_T old_agg = *agg;                                                 \
-      if (old_agg != *reinterpret_cast<const ADDR_T*>(may_alias_ptr(&skip_val))) { \
-        base_agg_func(agg, val);                                                   \
-      } else {                                                                     \
-        *agg = *reinterpret_cast<const ADDR_T*>(may_alias_ptr(&val));              \
-      }                                                                            \
-    }                                                                              \
+#define DEF_SKIP_AGG(base_agg_func)                                                     \
+  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val(                               \
+      ADDR_T* agg, const DATA_T val, const DATA_T skip_val) {                           \
+    if (val != skip_val) {                                                              \
+      const ADDR_T old_agg = *agg;                                                      \
+      if (old_agg != *reinterpret_cast<const ADDR_T*>(may_alias_ptr(&skip_val))) {      \
+        base_agg_func(agg, val);                                                        \
+      } else {                                                                          \
+        *agg = *reinterpret_cast<const ADDR_T*>(may_alias_ptr(&val));                   \
+      }                                                                                 \
+    }                                                                                   \
+  }                                                                                     \
+                                                                                        \
+  extern "C" ALWAYS_INLINE void base_agg_func##_skip_val_cpu_shared(                    \
+      ADDR_T* agg, const DATA_T val, const DATA_T skip_val) {                           \
+    if (val != skip_val) {                                                              \
+      if (!__atomic_compare_exchange(                                                   \
+              agg,                                                                      \
+              reinterpret_cast<ADDR_T*>(may_alias_ptr(const_cast<DATA_T*>(&skip_val))), \
+              reinterpret_cast<ADDR_T*>(may_alias_ptr(const_cast<DATA_T*>(&val))),      \
+              false,                                                                    \
+              __ATOMIC_ACQ_REL,                                                         \
+              __ATOMIC_ACQUIRE)) {                                                      \
+        base_agg_func##_cpu_shared(agg, val);                                           \
+      }                                                                                 \
+    }                                                                                   \
   }
 
 #define DATA_T double

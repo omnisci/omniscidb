@@ -432,6 +432,7 @@ class Executor {
 
   size_t getNumBytesForFetchedRow(const std::set<int>& table_ids_to_fetch) const;
 
+  bool hasLazyFetchColumns(const std::vector<Analyzer::Expr*>& target_exprs) const;
   std::vector<ColumnLazyFetchInfo> getColLazyFetchInfo(
       const std::vector<Analyzer::Expr*>& target_exprs) const;
 
@@ -673,7 +674,7 @@ class Executor {
   int32_t executePlanWithGroupBy(const RelAlgExecutionUnit& ra_exe_unit,
                                  const CompilationResult&,
                                  const bool hoist_literals,
-                                 ResultSetPtr& results,
+                                 ResultSetPtr* results,
                                  const ExecutorDeviceType device_type,
                                  std::vector<std::vector<const int8_t*>>& col_buffers,
                                  const std::vector<size_t> outer_tab_frag_ids,
@@ -687,12 +688,13 @@ class Executor {
                                  const uint32_t start_rowid,
                                  const uint32_t num_tables,
                                  const bool allow_runtime_interrupt,
-                                 RenderInfo* render_info);
+                                 RenderInfo* render_info,
+                                 const int64_t rows_to_process = -1);
   int32_t executePlanWithoutGroupBy(
       const RelAlgExecutionUnit& ra_exe_unit,
       const CompilationResult&,
       const bool hoist_literals,
-      ResultSetPtr& results,
+      ResultSetPtr* results,
       const std::vector<Analyzer::Expr*>& target_exprs,
       const ExecutorDeviceType device_type,
       std::vector<std::vector<const int8_t*>>& col_buffers,
@@ -704,7 +706,8 @@ class Executor {
       const uint32_t start_rowid,
       const uint32_t num_tables,
       const bool allow_runtime_interrupt,
-      RenderInfo* render_info);
+      RenderInfo* render_info,
+      const int64_t rows_to_process = -1);
 
  public:  // Temporary, ask saman about this
   static std::pair<int64_t, int32_t> reduceResults(const SQLAgg agg,
@@ -1124,6 +1127,7 @@ class Executor {
   friend class CodeGenerator;
   friend class ColumnFetcher;
   friend class ExecutionKernel;
+  friend class KernelSubtask;
   friend class HashJoin;  // cgen_state_
   friend class OverlapsJoinHashTable;
   friend class GroupByAndAggregate;

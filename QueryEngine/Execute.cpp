@@ -69,6 +69,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <set>
 #include <thread>
@@ -76,6 +77,8 @@
 bool g_enable_watchdog{false};
 bool g_enable_dynamic_watchdog{false};
 bool g_use_tbb_pool{false};
+bool g_enable_subfragments{false};
+size_t g_subfragment_size{500'000};
 bool g_enable_filter_function{true};
 unsigned g_dynamic_watchdog_time_limit{10000};
 bool g_allow_cpu_retry{true};
@@ -132,6 +135,7 @@ bool g_is_test_env{false};  // operating under a unit test environment. Currentl
 
 size_t g_approx_quantile_buffer{1000};
 size_t g_approx_quantile_centroids{300};
+bool g_enable_cpu_shmem{false};
 
 extern bool g_cache_string_hash;
 
@@ -329,6 +333,17 @@ size_t Executor::getNumBytesForFetchedRow(const std::set<int>& table_ids_to_fetc
     }
   }
   return num_bytes;
+}
+
+bool Executor::hasLazyFetchColumns(
+    const std::vector<Analyzer::Expr*>& target_exprs) const {
+  CHECK(plan_state_);
+  for (const auto target_expr : target_exprs) {
+    if (plan_state_->isLazyFetchColumn(target_expr)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<ColumnLazyFetchInfo> Executor::getColLazyFetchInfo(
@@ -2185,6 +2200,20 @@ void Executor::launchKernels(SharedKernelContext& shared_context,
   kernel_queue_time_ms_ += timer_stop(clock_begin);
 
   THREAD_POOL thread_pool;
+  // A hack to have unused unit for results collection.
+  const RelAlgExecutionUnit* ra_exe_unit =
+      kernels.empty() ? nullptr : &kernels[0]->ra_exe_unit_;
+
+#ifdef HAVE_TBB
+  if constexpr (std::is_same<decltype(&thread_pool),
+                             decltype(shared_context.getThreadPool())>::value) {
+    if (g_use_tbb_pool && g_enable_subfragments) {
+      shared_context.setThreadPool(&thread_pool);
+    }
+  }
+  ScopeGuard pool_guard([&shared_context]() { shared_context.setThreadPool(nullptr); });
+#endif  // HAVE_TBB
+
   VLOG(1) << "Launching " << kernels.size() << " kernels for query.";
   size_t kernel_idx = 1;
   for (auto& kernel : kernels) {
@@ -2200,6 +2229,26 @@ void Executor::launchKernels(SharedKernelContext& shared_context,
         kernel_idx++);
   }
   thread_pool.join();
+
+  for (auto& exec_ctx : shared_context.getTlsExecutionContext()) {
+    // The first arg is used for GPU only, it's not our case.
+    // TODO: add QueryExecutionContext::getRowSet() interface
+    // for our case.
+    if (exec_ctx) {
+      ResultSetPtr results;
+      if (ra_exe_unit->estimator) {
+        results = std::shared_ptr<ResultSet>(exec_ctx->estimator_result_set_.release());
+      } else {
+        results = exec_ctx->getRowSet(*ra_exe_unit, exec_ctx->query_mem_desc_);
+      }
+      shared_context.addDeviceResults(std::move(results), {});
+    }
+  }
+  if (shared_context.getSharedExecutionContext()) {
+    auto results = shared_context.getSharedExecutionContext()->getRowSet(
+        *ra_exe_unit, shared_context.getSharedExecutionContext()->query_mem_desc_);
+    shared_context.addDeviceResults(std::move(results), {});
+  }
 }
 
 std::vector<size_t> Executor::getTableFragmentIndices(
@@ -2846,7 +2895,7 @@ int32_t Executor::executePlanWithoutGroupBy(
     const RelAlgExecutionUnit& ra_exe_unit,
     const CompilationResult& compilation_result,
     const bool hoist_literals,
-    ResultSetPtr& results,
+    ResultSetPtr* results,
     const std::vector<Analyzer::Expr*>& target_exprs,
     const ExecutorDeviceType device_type,
     std::vector<std::vector<const int8_t*>>& col_buffers,
@@ -2858,10 +2907,11 @@ int32_t Executor::executePlanWithoutGroupBy(
     const uint32_t start_rowid,
     const uint32_t num_tables,
     const bool allow_runtime_interrupt,
-    RenderInfo* render_info) {
+    RenderInfo* render_info,
+    const int64_t rows_to_process) {
   INJECT_TIMER(executePlanWithoutGroupBy);
   auto timer = DEBUG_TIMER(__func__);
-  CHECK(!results);
+  CHECK(!results || !(*results));
   if (col_buffers.empty()) {
     return 0;
   }
@@ -2911,7 +2961,8 @@ int32_t Executor::executePlanWithoutGroupBy(
                                                0,
                                                &error_code,
                                                num_tables,
-                                               join_hash_table_ptrs);
+                                               join_hash_table_ptrs,
+                                               rows_to_process);
     output_memory_scope.reset(new OutVecOwner(out_vec));
   } else {
     auto gpu_generated_code = std::dynamic_pointer_cast<GpuCompilationContext>(
@@ -2954,10 +3005,14 @@ int32_t Executor::executePlanWithoutGroupBy(
   }
   if (ra_exe_unit.estimator) {
     CHECK(!error_code);
-    results =
-        std::shared_ptr<ResultSet>(query_exe_context->estimator_result_set_.release());
+    if (results) {
+      *results =
+          std::shared_ptr<ResultSet>(query_exe_context->estimator_result_set_.release());
+    }
     return 0;
   }
+  // Expect delayed results extraction (used for sub-fragments) for estimator only;
+  CHECK(results);
   std::vector<int64_t> reduced_outs;
   const auto num_frags = col_buffers.size();
   const size_t entry_count =
@@ -3043,7 +3098,7 @@ int32_t Executor::executePlanWithoutGroupBy(
   auto rows_ptr = std::shared_ptr<ResultSet>(
       query_exe_context->query_buffers_->result_sets_[0].release());
   rows_ptr->fillOneEntry(reduced_outs);
-  results = std::move(rows_ptr);
+  *results = std::move(rows_ptr);
   return error_code;
 }
 
@@ -3060,7 +3115,7 @@ int32_t Executor::executePlanWithGroupBy(
     const RelAlgExecutionUnit& ra_exe_unit,
     const CompilationResult& compilation_result,
     const bool hoist_literals,
-    ResultSetPtr& results,
+    ResultSetPtr* results,
     const ExecutorDeviceType device_type,
     std::vector<std::vector<const int8_t*>>& col_buffers,
     const std::vector<size_t> outer_tab_frag_ids,
@@ -3074,10 +3129,12 @@ int32_t Executor::executePlanWithGroupBy(
     const uint32_t start_rowid,
     const uint32_t num_tables,
     const bool allow_runtime_interrupt,
-    RenderInfo* render_info) {
+    RenderInfo* render_info,
+    const int64_t rows_to_process) {
   auto timer = DEBUG_TIMER(__func__);
   INJECT_TIMER(executePlanWithGroupBy);
-  CHECK(!results);
+  // TODO: get results via a separate method, but need to do something with literals.
+  CHECK(!results || !(*results));
   if (col_buffers.empty()) {
     return 0;
   }
@@ -3164,7 +3221,8 @@ int32_t Executor::executePlanWithGroupBy(
         ra_exe_unit_copy.union_all ? ra_exe_unit_copy.scan_limit : scan_limit,
         &error_code,
         num_tables,
-        join_hash_table_ptrs);
+        join_hash_table_ptrs,
+        rows_to_process);
   } else {
     try {
       auto gpu_generated_code = std::dynamic_pointer_cast<GpuCompilationContext>(
@@ -3209,13 +3267,13 @@ int32_t Executor::executePlanWithGroupBy(
     return error_code;
   }
 
-  if (error_code != Executor::ERR_OVERFLOW_OR_UNDERFLOW &&
+  if (results && error_code != Executor::ERR_OVERFLOW_OR_UNDERFLOW &&
       error_code != Executor::ERR_DIV_BY_ZERO && !render_allocator_map_ptr) {
-    results = query_exe_context->getRowSet(ra_exe_unit_copy,
-                                           query_exe_context->query_mem_desc_);
-    CHECK(results);
-    VLOG(2) << "results->rowCount()=" << results->rowCount();
-    results->holdLiterals(hoist_buf);
+    *results = query_exe_context->getRowSet(ra_exe_unit_copy,
+                                            query_exe_context->query_mem_desc_);
+    CHECK(*results);
+    VLOG(2) << "results->rowCount()=" << (*results)->rowCount();
+    (*results)->holdLiterals(hoist_buf);
   }
   if (error_code < 0 && render_allocator_map_ptr) {
     auto const adjusted_scan_limit =
@@ -3228,7 +3286,8 @@ int32_t Executor::executePlanWithGroupBy(
       return error_code;
     }
   }
-  if (error_code && (!scan_limit || check_rows_less_than_needed(results, scan_limit))) {
+  if (results && error_code &&
+      (!scan_limit || check_rows_less_than_needed(*results, scan_limit))) {
     return error_code;  // unlucky, not enough results and we ran out of slots
   }
 

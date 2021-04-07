@@ -592,7 +592,8 @@ std::vector<int64_t*> QueryExecutionContext::launchCpuCode(
     const int32_t scan_limit,
     int32_t* error_code,
     const uint32_t num_tables,
-    const std::vector<int64_t>& join_hash_tables) {
+    const std::vector<int64_t>& join_hash_tables,
+    const int64_t rows_to_process) {
   auto timer = DEBUG_TIMER(__func__);
   INJECT_TIMER(lauchCpuCode);
 
@@ -612,8 +613,12 @@ std::vector<int64_t*> QueryExecutionContext::launchCpuCode(
   const bool is_group_by{query_mem_desc_.isGroupBy()};
   std::vector<int64_t*> out_vec;
   if (ra_exe_unit.estimator) {
-    estimator_result_set_.reset(
-        new ResultSet(ra_exe_unit.estimator, ExecutorDeviceType::CPU, 0, nullptr));
+    // Subfragments collect the result from multiple runs in a single
+    // result set.
+    if (!estimator_result_set_) {
+      estimator_result_set_.reset(
+          new ResultSet(ra_exe_unit.estimator, ExecutorDeviceType::CPU, 0, nullptr));
+    }
     out_vec.push_back(
         reinterpret_cast<int64_t*>(estimator_result_set_->getHostEstimatorBuffer()));
   } else {
@@ -637,7 +642,9 @@ std::vector<int64_t*> QueryExecutionContext::launchCpuCode(
   }
   int64_t rowid_lookup_num_rows{*error_code ? *error_code + 1 : 0};
   auto num_rows_ptr =
-      rowid_lookup_num_rows ? &rowid_lookup_num_rows : &flatened_num_rows[0];
+      (rows_to_process > 0)
+          ? &rows_to_process
+          : (rowid_lookup_num_rows ? &rowid_lookup_num_rows : &flatened_num_rows[0]);
   int32_t total_matched_init{0};
 
   std::vector<int64_t> cmpt_val_buff;
