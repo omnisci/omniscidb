@@ -593,7 +593,7 @@ std::vector<int64_t*> QueryExecutionContext::launchCpuCode(
     int32_t* error_code,
     const uint32_t num_tables,
     const std::vector<int64_t>& join_hash_tables,
-    const int64_t rows_to_process) {
+    const int64_t num_rows_to_process) {
   auto timer = DEBUG_TIMER(__func__);
   INJECT_TIMER(lauchCpuCode);
 
@@ -642,8 +642,8 @@ std::vector<int64_t*> QueryExecutionContext::launchCpuCode(
   }
   int64_t rowid_lookup_num_rows{*error_code ? *error_code + 1 : 0};
   auto num_rows_ptr =
-      (rows_to_process > 0)
-          ? &rows_to_process
+      (num_rows_to_process > 0)
+          ? &num_rows_to_process
           : (rowid_lookup_num_rows ? &rowid_lookup_num_rows : &flatened_num_rows[0]);
   int32_t total_matched_init{0};
 

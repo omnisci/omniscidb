@@ -468,7 +468,7 @@ void KernelSubtask::run(Executor* executor) {
                                               kernel_.ra_exe_unit_.input_descs.size(),
                                               kernel_.eo.allow_runtime_query_interrupt,
                                               do_render ? kernel_.render_info_ : nullptr,
-                                              start_rowid_ + num_rows_);
+                                              start_rowid_ + num_rows_to_process_);
   } else {
     err = executor->executePlanWithGroupBy(kernel_.ra_exe_unit_,
                                            compilation_result,
@@ -488,7 +488,7 @@ void KernelSubtask::run(Executor* executor) {
                                            kernel_.ra_exe_unit_.input_descs.size(),
                                            kernel_.eo.allow_runtime_query_interrupt,
                                            do_render ? kernel_.render_info_ : nullptr,
-                                           start_rowid_ + num_rows_);
+                                           start_rowid_ + num_rows_to_process_);
   }
 
   if (err) {

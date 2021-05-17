@@ -129,14 +129,14 @@ class KernelSubtask {
                 std::shared_ptr<FetchResult> fetch_result,
                 int64_t total_num_input_rows,
                 size_t start_rowid,
-                size_t num_rows,
+                size_t num_rows_to_process,
                 size_t thread_idx)
       : kernel_(k)
       , shared_context_(shared_context)
       , fetch_result_(fetch_result)
       , total_num_input_rows_(total_num_input_rows)
       , start_rowid_(start_rowid)
-      , num_rows_(num_rows)
+      , num_rows_to_process_(num_rows_to_process)
       , thread_idx_(thread_idx) {}
 
   void run(Executor* executor);
@@ -147,7 +147,7 @@ class KernelSubtask {
   std::shared_ptr<FetchResult> fetch_result_;
   int64_t total_num_input_rows_;
   size_t start_rowid_;
-  size_t num_rows_;
+  size_t num_rows_to_process_;
   size_t thread_idx_;
 };
 #endif  // HAVE_TBB
