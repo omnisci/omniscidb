@@ -609,7 +609,8 @@ class Executor {
    */
   template <typename THREAD_POOL>
   void launchKernels(SharedKernelContext& shared_context,
-                     std::vector<std::unique_ptr<ExecutionKernel>>&& kernels);
+                     std::vector<std::unique_ptr<ExecutionKernel>>&& kernels,
+                     ExecutorDeviceType device_type);
 
   std::vector<size_t> getTableFragmentIndices(
       const RelAlgExecutionUnit& ra_exe_unit,

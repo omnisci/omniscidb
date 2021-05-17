@@ -277,7 +277,7 @@ void ExecutionKernel::runImpl(Executor* executor,
 #ifdef HAVE_TBB
   bool can_run_subkernels = shared_context.getThreadPool() != nullptr;
 
-  // Subfragments are supported for groupby queries and estimators only for now.
+  // Sub-tasks are supported for groupby queries and estimators only for now.
   can_run_subkernels = can_run_subkernels &&
                        (!ra_exe_unit_.groupby_exprs.empty() || ra_exe_unit_.estimator);
 
@@ -287,7 +287,7 @@ void ExecutionKernel::runImpl(Executor* executor,
       can_run_subkernels && !executor->hasLazyFetchColumns(ra_exe_unit_.target_exprs);
 
   // TODO: Use another structure to hold chunks. Currently,
-  // ResultSet holds them, but with subfragments chunk can
+  // ResultSet holds them, but with sub-tasks chunk can
   // be referenced by many ResultSets. So, some outer
   // structure to hold all ResultSets and all chunks is
   // required.
@@ -299,7 +299,7 @@ void ExecutionKernel::runImpl(Executor* executor,
 
   if (can_run_subkernels) {
     size_t total_rows = fetch_result->num_rows[0][0];
-    size_t sub_size = g_subfragment_size;
+    size_t sub_size = g_cpu_sub_task_size;
 
     for (size_t sub_start = start_rowid; sub_start < total_rows; sub_start += sub_size) {
       sub_size = (sub_start + sub_size > total_rows) ? total_rows - sub_start : sub_size;

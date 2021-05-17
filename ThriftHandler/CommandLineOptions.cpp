@@ -540,16 +540,16 @@ void CommandLineOptions::fillAdvancedOptions() {
           ->implicit_value(true),
       "Enable a new thread pool implementation for queuing kernels for execution.");
   developer_desc.add_options()(
-      "enable-subfragments",
-      po::value<bool>(&g_enable_subfragments)
-          ->default_value(g_enable_subfragments)
+      "enable-cpu-sub-tasks",
+      po::value<bool>(&g_enable_cpu_sub_tasks)
+          ->default_value(g_enable_cpu_sub_tasks)
           ->implicit_value(true),
-      "Enable data processing on subfragments level. This can improve CPU load balance "
-      "and decrease reduction overhead.");
+      "Enable parallel processing of a single data fragment on CPU. This can improve CPU "
+      "load balance and decrease reduction overhead.");
   developer_desc.add_options()(
-      "subfragment-size",
-      po::value<size_t>(&g_subfragment_size)->default_value(g_subfragment_size),
-      "Set subfragment size.");
+      "cpu-sub-task-size",
+      po::value<size_t>(&g_cpu_sub_task_size)->default_value(g_cpu_sub_task_size),
+      "Set CPU sub-task size in rows.");
   developer_desc.add_options()(
       "skip-intermediate-count",
       po::value<bool>(&g_skip_intermediate_count)
