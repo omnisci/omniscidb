@@ -641,10 +641,14 @@ std::vector<int64_t*> QueryExecutionContext::launchCpuCode(
         flatened_frag_offsets.end(), offsets.begin(), offsets.end());
   }
   int64_t rowid_lookup_num_rows{*error_code ? *error_code + 1 : 0};
-  auto num_rows_ptr =
-      (num_rows_to_process > 0)
-          ? &num_rows_to_process
-          : (rowid_lookup_num_rows ? &rowid_lookup_num_rows : &flatened_num_rows[0]);
+  int64_t* num_rows_ptr;
+  if (num_rows_to_process > 0) {
+    flatened_num_rows[0] = num_rows_to_process;
+    num_rows_ptr = flatened_num_rows.data();
+  } else {
+    num_rows_ptr =
+        rowid_lookup_num_rows ? &rowid_lookup_num_rows : flatened_num_rows.data();
+  }
   int32_t total_matched_init{0};
 
   std::vector<int64_t> cmpt_val_buff;
