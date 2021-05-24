@@ -127,6 +127,7 @@ class KernelSubtask {
   KernelSubtask(ExecutionKernel& k,
                 SharedKernelContext& shared_context,
                 std::shared_ptr<FetchResult> fetch_result,
+                std::shared_ptr<std::list<ChunkIter>> chunk_iterators,
                 int64_t total_num_input_rows,
                 size_t start_rowid,
                 size_t num_rows_to_process,
@@ -134,6 +135,7 @@ class KernelSubtask {
       : kernel_(k)
       , shared_context_(shared_context)
       , fetch_result_(fetch_result)
+      , chunk_iterators_(chunk_iterators)
       , total_num_input_rows_(total_num_input_rows)
       , start_rowid_(start_rowid)
       , num_rows_to_process_(num_rows_to_process)
@@ -145,6 +147,7 @@ class KernelSubtask {
   ExecutionKernel& kernel_;
   SharedKernelContext& shared_context_;
   std::shared_ptr<FetchResult> fetch_result_;
+  std::shared_ptr<std::list<ChunkIter>> chunk_iterators_;
   int64_t total_num_input_rows_;
   size_t start_rowid_;
   size_t num_rows_to_process_;

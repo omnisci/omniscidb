@@ -278,8 +278,10 @@ void ExecutionKernel::runImpl(Executor* executor,
   bool can_run_subkernels = shared_context.getThreadPool() != nullptr;
 
   // Sub-tasks are supported for groupby queries and estimators only for now.
-  can_run_subkernels = can_run_subkernels &&
-                       (!ra_exe_unit_.groupby_exprs.empty() || ra_exe_unit_.estimator);
+  bool is_groupby =
+      (ra_exe_unit_.groupby_exprs.size() > 1) ||
+      (ra_exe_unit_.groupby_exprs.size() == 1 && ra_exe_unit_.groupby_exprs.front());
+  can_run_subkernels = can_run_subkernels && (is_groupby || ra_exe_unit_.estimator);
 
   // In case some column is lazily fetched, we cannot mix different
   // fragments in a single ResultSet.
@@ -306,6 +308,7 @@ void ExecutionKernel::runImpl(Executor* executor,
       auto subtask = std::make_shared<KernelSubtask>(*this,
                                                      shared_context,
                                                      fetch_result,
+                                                     chunk_iterators_ptr,
                                                      total_num_input_rows,
                                                      sub_start,
                                                      sub_size,
