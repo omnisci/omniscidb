@@ -132,7 +132,7 @@ TEST_F(HighCardinalityStringEnv, PerfectHashNoFallback) {
 
   auto result =
       executor->executeWorkUnit(max_groups_buffer_entry_guess,
-                                /*is_agg=*/false,
+                                /*is_agg=*/true,
                                 table_infos,
                                 ra_exe_unit,
                                 CompilationOptions::defaults(ExecutorDeviceType::CPU),
@@ -228,7 +228,7 @@ TEST_F(HighCardinalityStringEnv, BaselineFallbackTest) {
   // expect throw w/out cardinality estimation
   EXPECT_THROW(
       executor->executeWorkUnit(max_groups_buffer_entry_guess,
-                                /*is_agg=*/false,
+                                /*is_agg=*/true,
                                 table_infos,
                                 ra_exe_unit,
                                 CompilationOptions::defaults(ExecutorDeviceType::CPU),
@@ -241,7 +241,7 @@ TEST_F(HighCardinalityStringEnv, BaselineFallbackTest) {
 
   auto result =
       executor->executeWorkUnit(max_groups_buffer_entry_guess,
-                                /*is_agg=*/false,
+                                /*is_agg=*/true,
                                 table_infos,
                                 ra_exe_unit,
                                 CompilationOptions::defaults(ExecutorDeviceType::CPU),
@@ -309,7 +309,7 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
   // no filters, so expect no throw w/out cardinality estimation
   auto result =
       executor->executeWorkUnit(max_groups_buffer_entry_guess,
-                                /*is_agg=*/false,
+                                /*is_agg=*/true,
                                 table_infos,
                                 ra_exe_unit,
                                 CompilationOptions::defaults(ExecutorDeviceType::CPU),
