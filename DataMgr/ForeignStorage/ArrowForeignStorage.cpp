@@ -83,18 +83,13 @@ class ArrowForeignStorageBase : public PersistentForeignStorageInterface {
       const ColumnDescriptor& c,
       std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array);
 
-  void generateNullValues(const std::vector<Frag>& fragments,
-                          std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array,
-                          const SQLTypeInfo& columnType);
+  std::shared_ptr<arrow::ChunkedArray> replaceNullValues(
+      const SQLTypeInfo& columnType,
+      std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array);
 
   template <typename T>
-  void setNullValues(const std::vector<Frag>& fragments,
-                     std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array);
-
-  template <typename T>
-  void setNulls(int8_t* data, int count);
-
-  void generateSentinelValues(int8_t* data, const SQLTypeInfo& columnType, size_t count);
+  std::shared_ptr<arrow::ChunkedArray> replaceNullValuesImpl(
+      std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array);
 
   void getSizeAndOffset(const Frag& frag,
                         const std::shared_ptr<arrow::Array>& chunk,
@@ -105,138 +100,160 @@ class ArrowForeignStorageBase : public PersistentForeignStorageInterface {
   int64_t makeFragment(const Frag& frag,
                        ArrowFragment& arrowFrag,
                        const std::vector<std::shared_ptr<arrow::Array>>& chunks,
-                       bool is_varlen,
-                       bool is_empty);
+                       bool is_varlen);
 
   std::map<std::array<int, 3>, std::vector<ArrowFragment>> m_columns;
 };
 
-void ArrowForeignStorageBase::generateNullValues(
-    const std::vector<Frag>& fragments,
-    std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array,
-    const SQLTypeInfo& columnType) {
+std::shared_ptr<arrow::ChunkedArray> ArrowForeignStorageBase::replaceNullValues(
+    const SQLTypeInfo& columnType,
+    std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array) {
   const size_t typeSize = columnType.get_size();
   if (columnType.is_integer() || is_datetime(columnType.get_type())) {
     switch (typeSize) {
       case 1:
-        setNullValues<int8_t>(fragments, arr_col_chunked_array);
-        break;
+        return replaceNullValuesImpl<int8_t>(arr_col_chunked_array);
       case 2:
-        setNullValues<int16_t>(fragments, arr_col_chunked_array);
-        break;
+        return replaceNullValuesImpl<int16_t>(arr_col_chunked_array);
       case 4:
-        setNullValues<int32_t>(fragments, arr_col_chunked_array);
-        break;
+        return replaceNullValuesImpl<int32_t>(arr_col_chunked_array);
       case 8:
-        setNullValues<int64_t>(fragments, arr_col_chunked_array);
-        break;
+        return replaceNullValuesImpl<int64_t>(arr_col_chunked_array);
       default:
         // TODO: throw unsupported integer type exception
         CHECK(false);
     }
-  } else {
-    if (typeSize == 4) {
-      setNullValues<float>(fragments, arr_col_chunked_array);
-    } else {
-      setNullValues<double>(fragments, arr_col_chunked_array);
+  } else if (columnType.is_fp()) {
+    switch (typeSize) {
+      case 4:
+        return replaceNullValuesImpl<float>(arr_col_chunked_array);
+      case 8:
+        return replaceNullValuesImpl<double>(arr_col_chunked_array);
     }
+  } else if (columnType.is_boolean()) {
+    return replaceNullValuesImpl<bool>(arr_col_chunked_array);
+  }
+  CHECK(false);
+  return nullptr;
+}
+
+void convertBoolBitmapBuffer(int8_t* dst,
+                             const uint8_t* src,
+                             const uint8_t* bitmap,
+                             int64_t length,
+                             int64_t bitmap_length,
+                             int8_t null_value) {
+  for (int64_t bitmap_idx = 0; bitmap_idx < bitmap_length - 1; ++bitmap_idx) {
+    auto source = src[bitmap_idx];
+    auto dest = dst + bitmap_idx * 8;
+    auto inversed_bitmap = ~bitmap[bitmap_idx];
+    for (int8_t bitmap_offset = 0; bitmap_offset < 8; ++bitmap_offset) {
+      auto is_null = (inversed_bitmap >> bitmap_offset) & 1;
+      auto val = (source >> bitmap_offset) & 1;
+      dest[bitmap_offset] = is_null ? null_value : val;
+    }
+  }
+
+  for (int64_t j = (bitmap_length - 1) * 8; j < length; ++j) {
+    auto is_null = (~bitmap[bitmap_length - 1] >> (j % 8)) & 1;
+    auto val = (src[bitmap_length - 1] >> (j % 8)) & 1;
+    dst[j] = is_null ? null_value : val;
   }
 }
 
+template <
+    typename V,
+    std::enable_if_t<!std::is_same_v<V, bool> && std::is_integral<V>::value, int> = 0>
+inline V get_null_value() {
+  return inline_int_null_value<V>();
+}
+
+template <typename V, std::enable_if_t<std::is_same_v<V, bool>, int> = 0>
+inline int8_t get_null_value() {
+  return inline_int_null_value<int8_t>();
+}
+
+template <typename V, std::enable_if_t<std::is_floating_point<V>::value, int> = 0>
+inline V get_null_value() {
+  return inline_fp_null_value<V>();
+}
+
 template <typename T>
-void ArrowForeignStorageBase::setNullValues(
-    const std::vector<Frag>& fragments,
+std::shared_ptr<arrow::ChunkedArray> ArrowForeignStorageBase::replaceNullValuesImpl(
     std::shared_ptr<arrow::ChunkedArray> arr_col_chunked_array) {
-  const T null_value = std::is_signed<T>::value ? std::numeric_limits<T>::min()
-                                                : std::numeric_limits<T>::max();
+  if ((!std::is_same_v<T, bool>)&&(arr_col_chunked_array->null_count() == 0)) {
+    // for boolean columns we still need to convert bitmaps to array
+    return arr_col_chunked_array;
+  }
+
+  auto null_value = get_null_value<T>();
+
+  auto resultBuf =
+      arrow::AllocateBuffer(sizeof(T) * arr_col_chunked_array->length()).ValueOrDie();
+  auto resultData = reinterpret_cast<T*>(resultBuf->mutable_data());
 
   tbb::parallel_for(
-      tbb::blocked_range<size_t>(0, fragments.size()),
-      [&](const tbb::blocked_range<size_t>& r0) {
-        for (size_t f = r0.begin(); f != r0.end(); ++f) {
-          tbb::parallel_for(
-              tbb::blocked_range<size_t>(fragments[f].first_chunk,
-                                         fragments[f].last_chunk + 1),
-              [&](const tbb::blocked_range<size_t>& r1) {
-                for (auto chunk_index = r1.begin(); chunk_index != r1.end();
-                     ++chunk_index) {
-                  auto chunk = arr_col_chunked_array->chunk(chunk_index).get();
-                  if (chunk->data()->null_count == chunk->data()->length) {
-                    // it means we will insert sentinel values in read function
-                    continue;
-                  }
-                  // We can not use mutable_data in case of shared access
-                  // This is not realy safe, but it is the only way to do this without
-                  // copiing
-                  // TODO: add support for sentinel values to read_csv
-                  auto data = const_cast<uint8_t*>(chunk->data()->buffers[1]->data());
-                  if (data && chunk->null_bitmap()) {  // TODO: to be checked and possibly
-                                                       // reimplemented
-                    // CHECK(data) << " is null";
-                    T* dataT = reinterpret_cast<T*>(data);
-                    const uint8_t* bitmap_data = chunk->null_bitmap_data();
-                    const int64_t length = chunk->length();
-                    const int64_t bitmap_length = chunk->null_bitmap()->size() - 1;
+      tbb::blocked_range<size_t>(0, arr_col_chunked_array->num_chunks()),
+      [&](const tbb::blocked_range<size_t>& r) {
+        for (size_t c = r.begin(); c != r.end(); ++c) {
+          size_t offset = 0;
+          for (int i = 0; i < c; i++) {
+            offset += arr_col_chunked_array->chunk(i)->length();
+          }
+          auto resWithOffset = resultData + offset;
 
-                    for (int64_t bitmap_idx = 0; bitmap_idx < bitmap_length;
-                         ++bitmap_idx) {
-                      T* res = dataT + bitmap_idx * 8;
-                      for (int8_t bitmap_offset = 0; bitmap_offset < 8; ++bitmap_offset) {
-                        auto is_null = (~bitmap_data[bitmap_idx] >> bitmap_offset) & 1;
-                        auto val = is_null ? null_value : res[bitmap_offset];
-                        res[bitmap_offset] = val;
-                      }
-                    }
+          auto chunk = arr_col_chunked_array->chunk(c);
 
-                    for (int64_t j = bitmap_length * 8; j < length; ++j) {
-                      auto is_null = (~bitmap_data[bitmap_length] >> (j % 8)) & 1;
-                      auto val = is_null ? null_value : dataT[j];
-                      dataT[j] = val;
-                    }
-                  }
-                }
-              });
+          if (chunk->null_count() == chunk->length()) {
+            std::fill(resWithOffset, resWithOffset + chunk->length(), null_value);
+            continue;
+          }
+
+          auto chunkData = reinterpret_cast<const T*>(chunk->data()->buffers[1]->data());
+
+          if (chunk->null_count() == 0) {
+            std::copy(chunkData, chunkData + chunk->length(), resWithOffset);
+            continue;
+          }
+
+          const uint8_t* bitmap_data = chunk->null_bitmap_data();
+          const int64_t length = chunk->length();
+          const int64_t bitmap_length = chunk->null_bitmap()->size();
+
+          if constexpr (std::is_same_v<T, bool>) {
+            convertBoolBitmapBuffer(reinterpret_cast<int8_t*>(resWithOffset),
+                                    reinterpret_cast<const uint8_t*>(chunkData),
+                                    bitmap_data,
+                                    length,
+                                    bitmap_length,
+                                    null_value);
+          } else {
+            for (int64_t bitmap_idx = 0; bitmap_idx < bitmap_length - 1; ++bitmap_idx) {
+              auto source = chunkData + bitmap_idx * 8;
+              auto dest = resWithOffset + bitmap_idx * 8;
+              auto inversed_bitmap = ~bitmap_data[bitmap_idx];
+              for (int8_t bitmap_offset = 0; bitmap_offset < 8; ++bitmap_offset) {
+                auto is_null = (inversed_bitmap >> bitmap_offset) & 1;
+                auto val = is_null ? null_value : source[bitmap_offset];
+                dest[bitmap_offset] = val;
+              }
+            }
+
+            for (int64_t j = (bitmap_length - 1) * 8; j < length; ++j) {
+              auto is_null = (~bitmap_data[bitmap_length - 1] >> (j % 8)) & 1;
+              auto val = is_null ? null_value : chunkData[j];
+              resWithOffset[j] = val;
+            }
+          }
         }
       });
-}
 
-template <typename T>
-void ArrowForeignStorageBase::setNulls(int8_t* data, int count) {
-  T* dataT = reinterpret_cast<T*>(data);
-  const T null_value = std::is_signed<T>::value ? std::numeric_limits<T>::min()
-                                                : std::numeric_limits<T>::max();
-  std::fill(dataT, dataT + count, null_value);
-}
+  using ArrowType = typename arrow::CTypeTraits<T>::ArrowType;
+  using ArrayType = typename arrow::TypeTraits<ArrowType>::ArrayType;
 
-void ArrowForeignStorageBase::generateSentinelValues(int8_t* data,
-                                                     const SQLTypeInfo& columnType,
-                                                     size_t count) {
-  const size_t type_size = columnType.get_size();
-  if (columnType.is_integer() || is_datetime(columnType.get_type())) {
-    switch (type_size) {
-      case 1:
-        setNulls<int8_t>(data, count);
-        break;
-      case 2:
-        setNulls<int16_t>(data, count);
-        break;
-      case 4:
-        setNulls<int32_t>(data, count);
-        break;
-      case 8:
-        setNulls<int64_t>(data, count);
-        break;
-      default:
-        // TODO: throw unsupported integer type exception
-        CHECK(false);
-    }
-  } else {
-    if (type_size == 4) {
-      setNulls<float>(data, count);
-    } else {
-      setNulls<double>(data, count);
-    }
-  }
+  auto array =
+      std::make_shared<ArrayType>(arr_col_chunked_array->length(), std::move(resultBuf));
+  return std::make_shared<arrow::ChunkedArray>(array);
 }
 
 void ArrowForeignStorageBase::getSizeAndOffset(const Frag& frag,
@@ -252,8 +269,7 @@ int64_t ArrowForeignStorageBase::makeFragment(
     const Frag& frag,
     ArrowFragment& arrowFrag,
     const std::vector<std::shared_ptr<arrow::Array>>& chunks,
-    bool is_varlen,
-    bool is_empty) {
+    bool is_varlen) {
   int64_t varlen = 0;
   arrowFrag.chunks.resize(frag.last_chunk - frag.first_chunk + 1);
   for (int i = frag.first_chunk, e = frag.last_chunk; i <= e; i++) {
@@ -263,18 +279,16 @@ int64_t ArrowForeignStorageBase::makeFragment(
     arrowFrag.sz += size;
     arrowFrag.chunks[i - frag.first_chunk] = chunks[i]->data();
     auto& buffers = chunks[i]->data()->buffers;
-    if (!is_empty) {
-      if (is_varlen) {
-        if (buffers.size() <= 2) {
-          throw std::runtime_error(
-              "Importing fixed length arrow array as variable length column");
-        }
-        auto offsets_buffer = reinterpret_cast<const uint32_t*>(buffers[1]->data());
-        varlen += offsets_buffer[offset + size] - offsets_buffer[offset];
-      } else if (buffers.size() != 2) {
+    if (is_varlen) {
+      if (buffers.size() <= 2) {
         throw std::runtime_error(
-            "Importing varialbe length arrow array as fixed length column");
+            "Importing fixed length arrow array as variable length column");
       }
+      auto offsets_buffer = reinterpret_cast<const uint32_t*>(buffers[1]->data());
+      varlen += offsets_buffer[offset + size] - offsets_buffer[offset];
+    } else if (buffers.size() != 2) {
+      throw std::runtime_error(
+          "Importing varialbe length arrow array as fixed length column");
     }
   }
   // return length of string buffer if array is none encoded string
@@ -361,6 +375,11 @@ void ArrowForeignStorageBase::parseArrowTable(Catalog_Namespace::Catalog* catalo
           auto arr_col_chunked_array = table.column(col_idx);
           auto column_type = c.columnType.get_type();
 
+          if (column_type != kDECIMAL && column_type != kNUMERIC &&
+              !c.columnType.is_string()) {
+            arr_col_chunked_array = replaceNullValues(column_type, arr_col_chunked_array);
+          }
+
           if (c.columnType.is_dict_encoded_string()) {
             StringDictionary* dict = dictionaries[col_key];
 
@@ -396,8 +415,6 @@ void ArrowForeignStorageBase::parseArrowTable(Catalog_Namespace::Catalog* catalo
                 break;
             }
           }
-          auto empty =
-              arr_col_chunked_array->null_count() == arr_col_chunked_array->length();
 
           auto fragments =
               calculateFragmentsOffsets(*arr_col_chunked_array, td.maxFragRows);
@@ -411,7 +428,7 @@ void ArrowForeignStorageBase::parseArrowTable(Catalog_Namespace::Catalog* catalo
             auto& frag = col[f];
             bool is_varlen = ctype == kTEXT && !c.columnType.is_dict_encoded_string();
             size_t varlen = makeFragment(
-                fragments[f], frag, arr_col_chunked_array->chunks(), is_varlen, empty);
+                fragments[f], frag, arr_col_chunked_array->chunks(), is_varlen);
 
             // create buffer descriptors
             if (ctype == kTEXT && !c.columnType.is_dict_encoded_string()) {
@@ -432,28 +449,22 @@ void ArrowForeignStorageBase::parseArrowTable(Catalog_Namespace::Catalog* catalo
               auto b = mgr->createBuffer(key);
               b->setSize(frag.sz * c.columnType.get_size());
               b->initEncoder(c.columnType);
-              if (!empty) {
-                size_t type_size = c.columnType.get_size();
-                tg.run([b, fr = &frag, type_size]() {
-                  size_t sz = 0;
-                  for (size_t i = 0; i < fr->chunks.size(); i++) {
-                    auto& chunk = fr->chunks[i];
-                    int offset = (i == 0) ? fr->offset : 0;
-                    size_t size = (i == fr->chunks.size() - 1) ? (fr->sz - sz)
-                                                               : (chunk->length - offset);
-                    sz += size;
-                    auto data = chunk->buffers[1]->data();
-                    b->getEncoder()->updateStatsEncoded(
-                        (const int8_t*)data + offset * type_size, size);
-                  }
-                });
-              }
+              size_t type_size = c.columnType.get_size();
+              tg.run([b, fr = &frag, type_size]() {
+                size_t sz = 0;
+                for (size_t i = 0; i < fr->chunks.size(); i++) {
+                  auto& chunk = fr->chunks[i];
+                  int offset = (i == 0) ? fr->offset : 0;
+                  size_t size = (i == fr->chunks.size() - 1) ? (fr->sz - sz)
+                                                             : (chunk->length - offset);
+                  sz += size;
+                  auto data = chunk->buffers[1]->data();
+                  b->getEncoder()->updateStatsEncoded(
+                      (const int8_t*)data + offset * type_size, size);
+                }
+              });
               b->getEncoder()->setNumElems(frag.sz);
             }
-          }
-          if (column_type != kDECIMAL && column_type != kNUMERIC &&
-              !c.columnType.is_string()) {
-            generateNullValues(fragments, arr_col_chunked_array, c.columnType);
           }
         }
       });  // each col and fragment
@@ -497,60 +508,50 @@ void ArrowForeignStorageBase::read(const ChunkKey& chunk_key,
       CHECK_GE(array_data->buffers.size(), 2UL);
       bp = array_data->buffers[1].get();
     }
-    if (bp) {
-      // offset buffer for none encoded strings need to be merged
-      if (chunk_key.size() == 5 && chunk_key[4] == 2) {
-        auto data = reinterpret_cast<const uint32_t*>(bp->data()) + offset;
-        auto dest_ui32 = reinterpret_cast<uint32_t*>(dest);
-        // as size contains count of string in chunk slice it would always be one less
-        // then offsets array size
-        sz = (size + 1) * sizeof(uint32_t);
-        if (sz > 0) {
-          if (i != 0) {
-            // We merge arrow chunks with string offsets into a single contigous fragment.
-            // Each string is represented by a pair of offsets, thus size of offset table
-            // is num strings + 1. When merging two chunks, the last number in the first
-            // chunk duplicates the first number in the second chunk, so we skip it.
-            data++;
-            sz -= sizeof(uint32_t);
-          } else {
-            // As we support cases when fragment starts with offset of arrow chunk we need
-            // to substract the first element of the first chunk from all elements in that
-            // fragment
-            varlen_offset -= data[0];
-          }
-          // We also re-calculate offsets in the second chunk as it is a continuation of
-          // the first one.
-          std::transform(data,
-                         data + (sz / sizeof(uint32_t)),
-                         dest_ui32,
-                         [varlen_offset](uint32_t val) { return val + varlen_offset; });
-          varlen_offset += data[(sz / sizeof(uint32_t)) - 1];
-        }
-      } else {
-        auto fixed_type = dynamic_cast<arrow::FixedWidthType*>(array_data->type.get());
-        if (fixed_type) {
-          std::memcpy(
-              dest,
-              bp->data() + (array_data->offset + offset) * (fixed_type->bit_width() / 8),
-              sz = size * (fixed_type->bit_width() / 8));
+    CHECK(bp);
+    // offset buffer for none encoded strings need to be merged
+    if (chunk_key.size() == 5 && chunk_key[4] == 2) {
+      auto data = reinterpret_cast<const uint32_t*>(bp->data()) + offset;
+      auto dest_ui32 = reinterpret_cast<uint32_t*>(dest);
+      // as size contains count of string in chunk slice it would always be one less
+      // then offsets array size
+      sz = (size + 1) * sizeof(uint32_t);
+      if (sz > 0) {
+        if (i != 0) {
+          // We merge arrow chunks with string offsets into a single contigous fragment.
+          // Each string is represented by a pair of offsets, thus size of offset table
+          // is num strings + 1. When merging two chunks, the last number in the first
+          // chunk duplicates the first number in the second chunk, so we skip it.
+          data++;
+          sz -= sizeof(uint32_t);
         } else {
-          auto offsets_buffer =
-              reinterpret_cast<const uint32_t*>(array_data->buffers[1]->data());
-          auto string_buffer_offset = offsets_buffer[offset + array_data->offset];
-          auto string_buffer_size =
-              offsets_buffer[offset + array_data->offset + size] - string_buffer_offset;
-          std::memcpy(dest, bp->data() + string_buffer_offset, sz = string_buffer_size);
+          // As we support cases when fragment starts with offset of arrow chunk we need
+          // to substract the first element of the first chunk from all elements in that
+          // fragment
+          varlen_offset -= data[0];
         }
+        // We also re-calculate offsets in the second chunk as it is a continuation of
+        // the first one.
+        std::transform(data,
+                       data + (sz / sizeof(uint32_t)),
+                       dest_ui32,
+                       [varlen_offset](uint32_t val) { return val + varlen_offset; });
+        varlen_offset += data[(sz / sizeof(uint32_t)) - 1];
       }
     } else {
-      // TODO: nullify?
       auto fixed_type = dynamic_cast<arrow::FixedWidthType*>(array_data->type.get());
       if (fixed_type) {
-        sz = size * (fixed_type->bit_width() / 8);
-        generateSentinelValues(dest, sql_type, size);
+        std::memcpy(
+            dest,
+            bp->data() + (array_data->offset + offset) * (fixed_type->bit_width() / 8),
+            sz = size * (fixed_type->bit_width() / 8));
       } else {
-        CHECK(false);  // TODO: what's else???
+        auto offsets_buffer =
+            reinterpret_cast<const uint32_t*>(array_data->buffers[1]->data());
+        auto string_buffer_offset = offsets_buffer[offset + array_data->offset];
+        auto string_buffer_size =
+            offsets_buffer[offset + array_data->offset + size] - string_buffer_offset;
+        std::memcpy(dest, bp->data() + string_buffer_offset, sz = string_buffer_size);
       }
     }
     dest += sz;

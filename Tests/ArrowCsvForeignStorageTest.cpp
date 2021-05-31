@@ -464,10 +464,10 @@ TEST(DataframeOptionsTest, HeaderlessTest) {
 
 TEST(NullValuesTest, NullDifferentTypes) {
   run_ddl_statement(
-      "CREATE DATAFRAME fsi_nulls (int4 INTEGER, int8 BIGINT, fp4 FLOAT, fp8 DOUBLE) "
-      "from 'CSV:../../Tests/Import/datafiles/null_values_numeric.csv';");
-  CHECK_EQ(12,
-           v<int64_t>(run_simple_agg("SELECT int4 FROM fsi_nulls WHERE fp8 IS NULL;")));
+      "CREATE DATAFRAME fsi_nulls (int4 INTEGER, int8 BIGINT, fp4 FLOAT, fp8 DOUBLE, ts "
+      "TIMESTAMP, b8 BOOLEAN) from "
+      "'CSV:../../Tests/Import/datafiles/null_values_numeric.csv';");
+  check_query<int64_t>("SELECT int4 FROM fsi_nulls WHERE fp8 IS NULL;", {12});
 
   CHECK_EQ(65,
            v<int64_t>(run_simple_agg("SELECT int8 FROM fsi_nulls WHERE int4 IS NULL;")));
@@ -475,14 +475,17 @@ TEST(NullValuesTest, NullDifferentTypes) {
   EXPECT_FLOAT_EQ(
       34.2, v<float>(run_simple_agg("SELECT fp4 FROM fsi_nulls WHERE int8 IS NULL;")));
 
-  EXPECT_DOUBLE_EQ(
-      76.2, v<double>(run_simple_agg("SELECT fp8 FROM fsi_nulls WHERE fp4 IS NULL;")));
+  check_query<double>("SELECT fp8 FROM fsi_nulls WHERE fp4 IS NULL;", {76.2});
+
+  check_query<int64_t>("SELECT int4 FROM fsi_nulls WHERE ts IS NULL;", {12});
+
+  check_query<int64_t>("SELECT int4 FROM fsi_nulls WHERE b8 IS NULL;", {12});
 }
 
 TEST(NullValuesTest, NullFullColumn) {
   run_ddl_statement(
       "CREATE DATAFRAME fsi_nulls_full (int4 INTEGER, int8 BIGINT, fp4 FLOAT, fp8 "
-      "DOUBLE) "
+      "DOUBLE, b8 BOOLEAN) "
       "from 'CSV:../../Tests/Import/datafiles/null_values_full_column.csv';");
   CHECK_EQ(0,
            v<int64_t>(run_simple_agg(
@@ -499,6 +502,10 @@ TEST(NullValuesTest, NullFullColumn) {
   CHECK_EQ(0,
            v<int64_t>(run_simple_agg(
                "SELECT COUNT(fp8) FROM fsi_nulls_full WHERE fp8 IS NOT NULL;")));
+
+  CHECK_EQ(0,
+           v<int64_t>(run_simple_agg(
+               "SELECT COUNT(fp8) FROM fsi_nulls_full WHERE b8 IS NOT NULL;")));
 }
 
 TEST(NullValuesTest, NullFragmentedColumn) {
