@@ -144,6 +144,8 @@ class KernelSubtask {
   void run(Executor* executor);
 
  private:
+  void runImpl(Executor* executor);
+
   ExecutionKernel& kernel_;
   SharedKernelContext& shared_context_;
   std::shared_ptr<FetchResult> fetch_result_;

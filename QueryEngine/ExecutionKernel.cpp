@@ -407,6 +407,33 @@ void ExecutionKernel::runImpl(Executor* executor,
 #ifdef HAVE_TBB
 
 void KernelSubtask::run(Executor* executor) {
+  try {
+    runImpl(executor);
+  } catch (const OutOfHostMemory& e) {
+    throw QueryExecutionError(Executor::ERR_OUT_OF_CPU_MEM, e.what());
+  } catch (const std::bad_alloc& e) {
+    throw QueryExecutionError(Executor::ERR_OUT_OF_CPU_MEM, e.what());
+  } catch (const OutOfRenderMemory& e) {
+    throw QueryExecutionError(Executor::ERR_OUT_OF_RENDER_MEM, e.what());
+  } catch (const OutOfMemory& e) {
+    throw QueryExecutionError(
+        Executor::ERR_OUT_OF_GPU_MEM,
+        e.what(),
+        QueryExecutionProperties{
+            kernel_.query_mem_desc.getQueryDescriptionType(),
+            kernel_.kernel_dispatch_mode == ExecutorDispatchMode::MultifragmentKernel});
+  } catch (const ColumnarConversionNotSupported& e) {
+    throw QueryExecutionError(Executor::ERR_COLUMNAR_CONVERSION_NOT_SUPPORTED, e.what());
+  } catch (const TooManyLiterals& e) {
+    throw QueryExecutionError(Executor::ERR_TOO_MANY_LITERALS, e.what());
+  } catch (const StringConstInResultSet& e) {
+    throw QueryExecutionError(Executor::ERR_STRING_CONST_IN_RESULTSET, e.what());
+  } catch (const QueryExecutionError& e) {
+    throw e;
+  }
+}
+
+void KernelSubtask::runImpl(Executor* executor) {
   auto& query_exe_context_owned = shared_context_.getTlsExecutionContext().local();
   const bool do_render =
       kernel_.render_info_ && kernel_.render_info_->isPotentialInSituRender();
