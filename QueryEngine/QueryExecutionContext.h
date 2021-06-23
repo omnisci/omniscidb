@@ -89,7 +89,8 @@ class QueryExecutionContext : boost::noncopyable {
       const int32_t scan_limit,
       int32_t* error_code,
       const uint32_t num_tables,
-      const std::vector<int64_t>& join_hash_tables);
+      const std::vector<int64_t>& join_hash_tables,
+      const int64_t num_rows_to_process = -1);
 
   int64_t getAggInitValForIndex(const size_t index) const;
 

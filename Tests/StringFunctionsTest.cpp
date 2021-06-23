@@ -183,7 +183,7 @@ TEST_F(LowerFunctionTest, MixedFilters) {
 TEST_F(LowerFunctionTest, LowercaseGroupBy) {
   auto result_set =
       sql("select lower(first_name), count(*) from lower_function_test_people "
-          "group by lower(first_name);");
+          "group by lower(first_name) order by lower(first_name);");
   std::vector<std::vector<ScalarTargetValue>> expected_result_set{{"john", int64_t(3)},
                                                                   {"sue", int64_t(1)}};
   compare_result_set(expected_result_set, result_set);

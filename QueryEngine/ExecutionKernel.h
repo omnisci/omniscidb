@@ -20,10 +20,21 @@
 #include "QueryEngine/ColumnFetcher.h"
 #include "QueryEngine/Descriptors/QueryCompilationDescriptor.h"
 
+#include "Shared/threadpool.h"
+
+#ifdef HAVE_TBB
+#include "tbb/enumerable_thread_specific.h"
+#endif
+
 class SharedKernelContext {
  public:
   SharedKernelContext(const std::vector<InputTableInfo>& query_infos)
-      : query_infos_(query_infos) {}
+      : query_infos_(query_infos)
+#ifdef HAVE_TBB
+      , thread_pool_(nullptr)
+#endif
+  {
+  }
 
   const std::vector<uint64_t>& getFragOffsets();
 
@@ -36,6 +47,12 @@ class SharedKernelContext {
 
   std::atomic_flag dynamic_watchdog_set = ATOMIC_FLAG_INIT;
 
+#ifdef HAVE_TBB
+  auto getThreadPool() { return thread_pool_; }
+  void setThreadPool(threadpool::ThreadPool<void>* pool) { thread_pool_ = pool; }
+  auto& getTlsExecutionContext() { return tls_execution_context_; }
+#endif  // HAVE_TBB
+
  private:
   std::mutex reduce_mutex_;
   std::vector<std::pair<ResultSetPtr, std::vector<size_t>>> all_fragment_results_;
@@ -44,6 +61,12 @@ class SharedKernelContext {
   std::mutex all_frag_row_offsets_mutex_;
   const std::vector<InputTableInfo>& query_infos_;
   const RegisteredQueryHint query_hint_;
+
+#ifdef HAVE_TBB
+  threadpool::ThreadPool<void>* thread_pool_;
+  tbb::enumerable_thread_specific<std::unique_ptr<QueryExecutionContext>>
+      tls_execution_context_;
+#endif  // HAVE_TBB
 };
 
 class ExecutionKernel {
@@ -75,8 +98,9 @@ class ExecutionKernel {
            const size_t thread_idx,
            SharedKernelContext& shared_context);
 
- private:
   const RelAlgExecutionUnit& ra_exe_unit_;
+
+ private:
   const ExecutorDeviceType chosen_device_type;
   int chosen_device_id;
   const ExecutionOptions& eo;
@@ -93,4 +117,42 @@ class ExecutionKernel {
   void runImpl(Executor* executor,
                const size_t thread_idx,
                SharedKernelContext& shared_context);
+
+  friend class KernelSubtask;
 };
+
+#ifdef HAVE_TBB
+class KernelSubtask {
+ public:
+  KernelSubtask(ExecutionKernel& k,
+                SharedKernelContext& shared_context,
+                std::shared_ptr<FetchResult> fetch_result,
+                std::shared_ptr<std::list<ChunkIter>> chunk_iterators,
+                int64_t total_num_input_rows,
+                size_t start_rowid,
+                size_t num_rows_to_process,
+                size_t thread_idx)
+      : kernel_(k)
+      , shared_context_(shared_context)
+      , fetch_result_(fetch_result)
+      , chunk_iterators_(chunk_iterators)
+      , total_num_input_rows_(total_num_input_rows)
+      , start_rowid_(start_rowid)
+      , num_rows_to_process_(num_rows_to_process)
+      , thread_idx_(thread_idx) {}
+
+  void run(Executor* executor);
+
+ private:
+  void runImpl(Executor* executor);
+
+  ExecutionKernel& kernel_;
+  SharedKernelContext& shared_context_;
+  std::shared_ptr<FetchResult> fetch_result_;
+  std::shared_ptr<std::list<ChunkIter>> chunk_iterators_;
+  int64_t total_num_input_rows_;
+  size_t start_rowid_;
+  size_t num_rows_to_process_;
+  size_t thread_idx_;
+};
+#endif  // HAVE_TBB
