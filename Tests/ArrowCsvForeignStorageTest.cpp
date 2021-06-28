@@ -524,6 +524,45 @@ TEST(NullValuesTest, NullFragmentedColumn) {
                    v<double>(run_simple_agg("SELECT SUM(fp8) FROM fsi_nulls_frag;")));
 }
 
+TEST(NullValuesTest, NullBooleanColumn) {
+  run_ddl_statement(
+      "CREATE DATAFRAME fsi_nulls_boolean (id INTEGER, val BOOLEAN, val2 BOOLEAN) from "
+      "'CSV:../../Tests/Import/datafiles/null_values_boolean.csv';");
+
+  auto null = INT8_MIN;
+  check_query<int64_t>("SELECT val FROM fsi_nulls_boolean order by id;",
+                       {true,
+                        null,
+                        false,
+                        true,
+                        false,
+                        null,
+                        null,
+                        false,
+                        true,
+                        null,
+                        null,
+                        false,
+                        true,
+                        true});
+
+  check_query<int64_t>("SELECT val2 FROM fsi_nulls_boolean order by id;",
+                       {true,
+                        false,
+                        true,
+                        false,
+                        false,
+                        true,
+                        true,
+                        false,
+                        true,
+                        false,
+                        true,
+                        false,
+                        false,
+                        true});
+}
+
 TEST(NullValuesTest, NullTextColumn) {
   run_ddl_statement(
       "CREATE DATAFRAME fsi_nulls_text (col0 TEXT ENCODING DICT, col1 INTEGER, col2 "

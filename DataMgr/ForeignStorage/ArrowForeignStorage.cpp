@@ -188,31 +188,37 @@ std::shared_ptr<arrow::ChunkedArray> ArrowForeignStorageBase::replaceNullValuesI
 
   auto null_value = get_null_value<T>();
 
-  auto resultBuf =
+  auto result_buf =
       arrow::AllocateBuffer(sizeof(T) * arr_col_chunked_array->length()).ValueOrDie();
-  auto resultData = reinterpret_cast<T*>(resultBuf->mutable_data());
+  auto result_data = reinterpret_cast<T*>(result_buf->mutable_data());
 
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, arr_col_chunked_array->num_chunks()),
       [&](const tbb::blocked_range<size_t>& r) {
         for (size_t c = r.begin(); c != r.end(); ++c) {
           size_t offset = 0;
-          for (int i = 0; i < c; i++) {
+          for (size_t i = 0; i < c; i++) {
             offset += arr_col_chunked_array->chunk(i)->length();
           }
-          auto resWithOffset = resultData + offset;
+          auto res_with_offset = result_data + offset;
 
           auto chunk = arr_col_chunked_array->chunk(c);
 
           if (chunk->null_count() == chunk->length()) {
-            std::fill(resWithOffset, resWithOffset + chunk->length(), null_value);
+            std::fill(res_with_offset, res_with_offset + chunk->length(), null_value);
             continue;
           }
 
-          auto chunkData = reinterpret_cast<const T*>(chunk->data()->buffers[1]->data());
+          auto chunk_data = reinterpret_cast<const T*>(chunk->data()->buffers[1]->data());
 
           if (chunk->null_count() == 0) {
-            std::copy(chunkData, chunkData + chunk->length(), resWithOffset);
+            if constexpr (std::is_same_v<T, bool>) {
+              for (int i = 0; i < chunk->length(); i++) {
+                res_with_offset[i] = (chunk_data[i / 8] >> (i % 8)) & 1;
+              }
+            } else {
+              std::copy(chunk_data, chunk_data + chunk->length(), res_with_offset);
+            }
             continue;
           }
 
@@ -221,16 +227,16 @@ std::shared_ptr<arrow::ChunkedArray> ArrowForeignStorageBase::replaceNullValuesI
           const int64_t bitmap_length = chunk->null_bitmap()->size();
 
           if constexpr (std::is_same_v<T, bool>) {
-            convertBoolBitmapBuffer(reinterpret_cast<int8_t*>(resWithOffset),
-                                    reinterpret_cast<const uint8_t*>(chunkData),
+            convertBoolBitmapBuffer(reinterpret_cast<int8_t*>(res_with_offset),
+                                    reinterpret_cast<const uint8_t*>(chunk_data),
                                     bitmap_data,
                                     length,
                                     bitmap_length,
                                     null_value);
           } else {
             for (int64_t bitmap_idx = 0; bitmap_idx < bitmap_length - 1; ++bitmap_idx) {
-              auto source = chunkData + bitmap_idx * 8;
-              auto dest = resWithOffset + bitmap_idx * 8;
+              auto source = chunk_data + bitmap_idx * 8;
+              auto dest = res_with_offset + bitmap_idx * 8;
               auto inversed_bitmap = ~bitmap_data[bitmap_idx];
               for (int8_t bitmap_offset = 0; bitmap_offset < 8; ++bitmap_offset) {
                 auto is_null = (inversed_bitmap >> bitmap_offset) & 1;
@@ -241,8 +247,8 @@ std::shared_ptr<arrow::ChunkedArray> ArrowForeignStorageBase::replaceNullValuesI
 
             for (int64_t j = (bitmap_length - 1) * 8; j < length; ++j) {
               auto is_null = (~bitmap_data[bitmap_length - 1] >> (j % 8)) & 1;
-              auto val = is_null ? null_value : chunkData[j];
-              resWithOffset[j] = val;
+              auto val = is_null ? null_value : chunk_data[j];
+              res_with_offset[j] = val;
             }
           }
         }
@@ -252,7 +258,7 @@ std::shared_ptr<arrow::ChunkedArray> ArrowForeignStorageBase::replaceNullValuesI
   using ArrayType = typename arrow::TypeTraits<ArrowType>::ArrayType;
 
   auto array =
-      std::make_shared<ArrayType>(arr_col_chunked_array->length(), std::move(resultBuf));
+      std::make_shared<ArrayType>(arr_col_chunked_array->length(), std::move(result_buf));
   return std::make_shared<arrow::ChunkedArray>(array);
 }
 
@@ -288,7 +294,7 @@ int64_t ArrowForeignStorageBase::makeFragment(
       varlen += offsets_buffer[offset + size] - offsets_buffer[offset];
     } else if (buffers.size() != 2) {
       throw std::runtime_error(
-          "Importing varialbe length arrow array as fixed length column");
+          "Importing variable length arrow array as fixed length column");
     }
   }
   // return length of string buffer if array is none encoded string
