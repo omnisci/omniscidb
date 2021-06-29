@@ -78,10 +78,11 @@ class PerfectJoinHashTableBuilder {
       data_mgr.free(gpu_hash_table_err_buff);
     };
     CHECK(gpu_hash_table_err_buff);
-    auto dev_err_buff =
-        reinterpret_cast<CUdeviceptr>(gpu_hash_table_err_buff->getMemoryPtr());
+    auto dev_err_buff = gpu_hash_table_err_buff->getMemoryPtr();
     int err{0};
-    copy_to_gpu(&data_mgr, dev_err_buff, &err, sizeof(err), device_id);
+
+    auto allocator = data_mgr.createGpuAllocator(device_id);
+    allocator->copyToDevice(dev_err_buff, &err, sizeof(err));
 
     CHECK(hash_table_);
     auto gpu_hash_table_buff = hash_table_->getGpuBuffer();
@@ -160,7 +161,7 @@ class PerfectJoinHashTableBuilder {
         }
       }
     }
-    copy_from_gpu(&data_mgr, &err, dev_err_buff, sizeof(err), device_id);
+    allocator->copyFromDevice(&err, dev_err_buff, sizeof(err));
     if (err) {
       if (layout == HashType::OneToOne) {
         throw NeedsOneToManyHash();

@@ -231,26 +231,26 @@ class HashJoin {
     return hash_table->getHashTableBufferSize(device_type);
   }
 
-  int64_t getJoinHashBuffer(const ExecutorDeviceType device_type,
+  int8_t* getJoinHashBuffer(const ExecutorDeviceType device_type,
                             const int device_id) const {
     // TODO: just make device_id a size_t
     CHECK_LT(size_t(device_id), hash_tables_for_device_.size());
     if (!hash_tables_for_device_[device_id]) {
-      return 0;
+      return nullptr;
     }
     CHECK(hash_tables_for_device_[device_id]);
     auto hash_table = hash_tables_for_device_[device_id].get();
 #ifdef HAVE_CUDA
     if (device_type == ExecutorDeviceType::CPU) {
-      return reinterpret_cast<int64_t>(hash_table->getCpuBuffer());
+      return hash_table->getCpuBuffer();
     } else {
       CHECK(hash_table);
       const auto gpu_buff = hash_table->getGpuBuffer();
-      return reinterpret_cast<CUdeviceptr>(gpu_buff);
+      return gpu_buff;
     }
 #else
     CHECK(device_type == ExecutorDeviceType::CPU);
-    return reinterpret_cast<int64_t>(hash_table->getCpuBuffer());
+    return hash_table->getCpuBuffer();
 #endif
   }
 

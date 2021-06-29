@@ -47,12 +47,12 @@ class DeviceAllocator : public Allocator {
  public:
   virtual void free(Data_Namespace::AbstractBuffer* ab) const = 0;
 
-  virtual void copyToDevice(int8_t* device_dst,
-                            const int8_t* host_src,
+  virtual void copyToDevice(void* device_dst,
+                            const void* host_src,
                             const size_t num_bytes) const = 0;
 
-  virtual void copyFromDevice(int8_t* host_dst,
-                              const int8_t* device_src,
+  virtual void copyFromDevice(void* host_dst,
+                              const void* device_src,
                               const size_t num_bytes) const = 0;
 
   virtual void zeroDeviceMem(int8_t* device_ptr, const size_t num_bytes) const = 0;

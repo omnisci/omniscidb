@@ -17,12 +17,12 @@
 #ifndef QUERYENGINE_JOINHASHTABLE_GPUUTILS_H
 #define QUERYENGINE_JOINHASHTABLE_GPUUTILS_H
 
-#include "DataMgr/Allocators/CudaAllocator.h"
+#include "DataMgr/Allocators/DeviceAllocator.h"
 #include "QueryEngine/GpuMemUtils.h"
 
 template <class T>
 T* transfer_vector_of_flat_objects_to_gpu(const std::vector<T>& vec,
-                                          CudaAllocator& allocator) {
+                                          DeviceAllocator& allocator) {
   static_assert(std::is_trivially_copyable<T>::value && std::is_standard_layout<T>::value,
                 "Transferring a vector to GPU only works for flat object elements");
   const auto vec_bytes = vec.size() * sizeof(T);
@@ -32,7 +32,7 @@ T* transfer_vector_of_flat_objects_to_gpu(const std::vector<T>& vec,
 }
 
 template <class T>
-T* transfer_flat_object_to_gpu(const T& object, CudaAllocator& allocator) {
+T* transfer_flat_object_to_gpu(const T& object, DeviceAllocator& allocator) {
   static_assert(std::is_standard_layout<T>::value,
                 "Transferring an object to GPU only works for standard layout elements");
   const auto bytes = sizeof(T);

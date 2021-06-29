@@ -430,11 +430,9 @@ void ResultSet::syncEstimatorBuffer() const {
       static_cast<int8_t*>(checked_calloc(estimator_->getBufferSize(), 1));
   CHECK(device_estimator_buffer_);
   auto device_buffer_ptr = device_estimator_buffer_->getMemoryPtr();
-  copy_from_gpu(data_mgr_,
-                host_estimator_buffer_,
-                reinterpret_cast<CUdeviceptr>(device_buffer_ptr),
-                estimator_->getBufferSize(),
-                device_id_);
+  auto allocator = data_mgr_->createGpuAllocator(device_id_);
+  allocator->copyFromDevice(
+      host_estimator_buffer_, device_buffer_ptr, estimator_->getBufferSize());
 }
 
 void ResultSet::setQueueTime(const int64_t queue_time) {
@@ -938,13 +936,13 @@ void ResultSet::radixSortOnGpu(
   auto timer = DEBUG_TIMER(__func__);
   auto data_mgr = &catalog_->getDataMgr();
   const int device_id{0};
-  CudaAllocator cuda_allocator(data_mgr, device_id);
+  auto allocator = data_mgr->createGpuAllocator(device_id);
   CHECK_GT(block_size_, 0);
   CHECK_GT(grid_size_, 0);
   std::vector<int64_t*> group_by_buffers(block_size_);
   group_by_buffers[0] = reinterpret_cast<int64_t*>(storage_->getUnderlyingBuffer());
   auto dev_group_by_buffers =
-      create_dev_group_by_buffers(&cuda_allocator,
+      create_dev_group_by_buffers(allocator.get(),
                                   group_by_buffers,
                                   query_mem_desc_,
                                   block_size_,
@@ -959,7 +957,7 @@ void ResultSet::radixSortOnGpu(
   inplace_sort_gpu(
       order_entries, query_mem_desc_, dev_group_by_buffers, data_mgr, device_id);
   copy_group_by_buffers_from_gpu(
-      data_mgr,
+      *allocator,
       group_by_buffers,
       query_mem_desc_.getBufferSizeBytes(ExecutorDeviceType::GPU),
       dev_group_by_buffers.second,

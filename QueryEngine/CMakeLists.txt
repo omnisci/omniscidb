@@ -35,6 +35,7 @@ set(query_engine_source_files
     Descriptors/QueryFragmentDescriptor.cpp
     Descriptors/QueryMemoryDescriptor.cpp
     Descriptors/RelAlgExecutionDescriptor.cpp
+    DeviceKernel.cpp
     EquiJoinCondition.cpp
     Execute.cpp
     ExecuteUpdate.cpp

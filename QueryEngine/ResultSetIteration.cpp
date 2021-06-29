@@ -487,7 +487,7 @@ InternalTargetValue ResultSet::RowWiseTargetAccessor::getColumnInternal(
           rowwise_target_ptr + reinterpret_cast<size_t>(offsets_for_target.ptr2);
       const auto str_len = read_int_from_buff(ptr2, offsets_for_target.compact_sz2);
       CHECK_GE(str_len, 0);
-      return result_set_->getVarlenOrderEntry(i1, str_len);
+      return result_set_->getVarlenOrderEntry(reinterpret_cast<char*>(i1), str_len);
     }
     return InternalTargetValue(
         type_info.is_fp() ? i1 : int_resize_cast(i1, type_info.get_logical_size()));
@@ -616,14 +616,14 @@ InternalTargetValue ResultSet::ColumnWiseTargetAccessor::getColumnInternal(
               entry_idx, offsets_for_target.ptr2, offsets_for_target.compact_sz2),
           offsets_for_target.compact_sz2);
       CHECK_GE(i2, 0);
-      return result_set_->getVarlenOrderEntry(i1, i2);
+      return result_set_->getVarlenOrderEntry(reinterpret_cast<char*>(i1), i2);
     }
     return InternalTargetValue(
         type_info.is_fp() ? i1 : int_resize_cast(i1, type_info.get_logical_size()));
   }
 }
 
-InternalTargetValue ResultSet::getVarlenOrderEntry(const int64_t str_ptr,
+InternalTargetValue ResultSet::getVarlenOrderEntry(char* str_ptr,
                                                    const size_t str_len) const {
   char* host_str_ptr{nullptr};
   std::vector<int8_t> cpu_buffer;
@@ -632,15 +632,12 @@ InternalTargetValue ResultSet::getVarlenOrderEntry(const int64_t str_ptr,
     const auto executor = query_mem_desc_.getExecutor();
     CHECK(executor);
     auto& data_mgr = executor->catalog_->getDataMgr();
-    copy_from_gpu(&data_mgr,
-                  &cpu_buffer[0],
-                  static_cast<CUdeviceptr>(str_ptr),
-                  str_len,
-                  device_id_);
+    auto allocator = data_mgr.createGpuAllocator(device_id_);
+    allocator->copyFromDevice(&cpu_buffer[0], str_ptr, str_len);
     host_str_ptr = reinterpret_cast<char*>(&cpu_buffer[0]);
   } else {
     CHECK(device_type_ == ExecutorDeviceType::CPU);
-    host_str_ptr = reinterpret_cast<char*>(str_ptr);
+    host_str_ptr = str_ptr;
   }
   std::string str(host_str_ptr, str_len);
   return InternalTargetValue(row_set_mem_owner_->addString(str));
@@ -931,8 +928,8 @@ inline std::unique_ptr<ArrayDatum> fetch_data_from_gpu(int64_t varlen_ptr,
                                                        Data_Namespace::DataMgr* data_mgr,
                                                        const int device_id) {
   auto cpu_buf = std::shared_ptr<int8_t>(new int8_t[length], FreeDeleter());
-  copy_from_gpu(
-      data_mgr, cpu_buf.get(), static_cast<CUdeviceptr>(varlen_ptr), length, device_id);
+  auto allocator = data_mgr->createGpuAllocator(device_id);
+  allocator->copyFromDevice(cpu_buf.get(), reinterpret_cast<int8_t*>(varlen_ptr), length);
   // Just fetching the data from gpu, not checking geo nullness
   return std::make_unique<ArrayDatum>(length, cpu_buf, false);
 }
@@ -1402,11 +1399,9 @@ TargetValue ResultSet::makeVarlenTargetValue(const int8_t* ptr1,
     const auto executor = query_mem_desc_.getExecutor();
     CHECK(executor);
     auto& data_mgr = executor->catalog_->getDataMgr();
-    copy_from_gpu(&data_mgr,
-                  &cpu_buffer[0],
-                  static_cast<CUdeviceptr>(varlen_ptr),
-                  length,
-                  device_id_);
+    auto device_allocator = data_mgr.createGpuAllocator(device_id_);
+    device_allocator->copyFromDevice(
+        &cpu_buffer[0], reinterpret_cast<int8_t*>(varlen_ptr), length);
     varlen_ptr = reinterpret_cast<int64_t>(&cpu_buffer[0]);
   }
   if (target_info.sql_type.is_array()) {

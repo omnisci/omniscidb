@@ -103,7 +103,6 @@ class QueryMemoryInitializer {
     return num_buffers_;
   }
 
-#ifdef HAVE_CUDA
   GpuGroupByBuffers setupTableFunctionGpuBuffers(
       const QueryMemoryDescriptor& query_mem_desc,
       const int device_id,
@@ -116,9 +115,8 @@ class QueryMemoryInitializer {
                                        const int device_id,
                                        const unsigned block_size_x,
                                        const unsigned grid_size_x);
-#endif
 
-  void copyGroupByBuffersFromGpu(Data_Namespace::DataMgr* data_mgr,
+  void copyGroupByBuffersFromGpu(DeviceAllocator& device_allocator,
                                  const QueryMemoryDescriptor& query_mem_desc,
                                  const size_t entry_count,
                                  const GpuGroupByBuffers& gpu_group_by_buffers,
@@ -169,9 +167,8 @@ class QueryMemoryInitializer {
                                      const bool deferred,
                                      const Executor* executor);
 
-#ifdef HAVE_CUDA
   GpuGroupByBuffers prepareTopNHeapsDevBuffer(const QueryMemoryDescriptor& query_mem_desc,
-                                              const CUdeviceptr init_agg_vals_dev_ptr,
+                                              const int8_t* init_agg_vals_dev_ptr,
                                               const size_t n,
                                               const int device_id,
                                               const unsigned block_size_x,
@@ -180,7 +177,7 @@ class QueryMemoryInitializer {
   GpuGroupByBuffers createAndInitializeGroupByBufferGpu(
       const RelAlgExecutionUnit& ra_exe_unit,
       const QueryMemoryDescriptor& query_mem_desc,
-      const CUdeviceptr init_agg_vals_dev_ptr,
+      const int8_t* init_agg_vals_dev_ptr,
       const int device_id,
       const ExecutorDispatchMode dispatch_mode,
       const unsigned block_size_x,
@@ -189,7 +186,6 @@ class QueryMemoryInitializer {
       const bool can_sort_on_gpu,
       const bool output_columnar,
       RenderAllocator* render_allocator);
-#endif
 
   size_t computeNumberOfBuffers(const QueryMemoryDescriptor& query_mem_desc,
                                 const ExecutorDeviceType device_type,

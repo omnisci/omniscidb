@@ -733,7 +733,7 @@ class Executor {
  private:
   ResultSetPtr resultsUnion(SharedKernelContext& shared_context,
                             const RelAlgExecutionUnit& ra_exe_unit);
-  std::vector<int64_t> getJoinHashTablePtrs(const ExecutorDeviceType device_type,
+  std::vector<int8_t*> getJoinHashTablePtrs(const ExecutorDeviceType device_type,
                                             const int device_id);
   ResultSetPtr reduceMultiDeviceResults(
       const RelAlgExecutionUnit&,

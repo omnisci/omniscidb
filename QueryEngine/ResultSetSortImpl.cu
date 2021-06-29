@@ -103,11 +103,11 @@ thrust::device_ptr<T> get_device_copy_ptr(const thrust::host_vector<T>& host_vec
   const auto host_vec_bytes = host_vec.size() * sizeof(T);
   T* dev_ptr = reinterpret_cast<T*>(
       thrust_allocator.allocateScopedBuffer(align_to_int64(host_vec_bytes)));
-  copy_to_gpu(thrust_allocator.getDataMgr(),
-              reinterpret_cast<CUdeviceptr>(dev_ptr),
-              &host_vec[0],
-              host_vec_bytes,
-              thrust_allocator.getDeviceId());
+  copy_to_nvidia_gpu(thrust_allocator.getDataMgr(),
+                     reinterpret_cast<CUdeviceptr>(dev_ptr),
+                     &host_vec[0],
+                     host_vec_bytes,
+                     thrust_allocator.getDeviceId());
   return thrust::device_ptr<T>(dev_ptr);
 }
 

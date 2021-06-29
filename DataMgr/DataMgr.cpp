@@ -23,6 +23,7 @@
 #include "BufferMgr/CpuBufferMgr/CpuBufferMgr.h"
 #include "BufferMgr/GpuCudaBufferMgr/GpuCudaBufferMgr.h"
 #include "CudaMgr/CudaMgr.h"
+#include "DataMgr/Allocators/CudaAllocator.h"
 #include "FileMgr/GlobalFileMgr.h"
 #include "PersistentStorageMgr/PersistentStorageMgr.h"
 
@@ -464,6 +465,14 @@ AbstractBuffer* DataMgr::alloc(const MemoryLevel memoryLevel,
   const auto level = static_cast<int>(memoryLevel);
   CHECK_LT(deviceId, levelSizes_[level]);
   return bufferMgrs_[level][deviceId]->alloc(numBytes);
+}
+
+std::unique_ptr<DeviceAllocator> DataMgr::createGpuAllocator(int device_id) {
+#ifdef HAVE_CUDA
+  return std::make_unique<CudaAllocator>(this, device_id);
+#else
+  UNREACHABLE();
+#endif
 }
 
 void DataMgr::free(AbstractBuffer* buffer) {

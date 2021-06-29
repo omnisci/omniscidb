@@ -3005,13 +3005,10 @@ int32_t Executor::executePlanWithoutGroupBy(
                                                join_hash_table_ptrs);
     output_memory_scope.reset(new OutVecOwner(out_vec));
   } else {
-    auto gpu_generated_code = std::dynamic_pointer_cast<GpuCompilationContext>(
-        compilation_result.generated_code);
-    CHECK(gpu_generated_code);
     try {
       out_vec = query_exe_context->launchGpuCode(
           ra_exe_unit,
-          gpu_generated_code.get(),
+          compilation_result.generated_code.get(),
           hoist_literals,
           hoist_buf,
           col_buffers,
@@ -3258,12 +3255,9 @@ int32_t Executor::executePlanWithGroupBy(
         join_hash_table_ptrs);
   } else {
     try {
-      auto gpu_generated_code = std::dynamic_pointer_cast<GpuCompilationContext>(
-          compilation_result.generated_code);
-      CHECK(gpu_generated_code);
       query_exe_context->launchGpuCode(
           ra_exe_unit_copy,
-          gpu_generated_code.get(),
+          compilation_result.generated_code.get(),
           hoist_literals,
           hoist_buf,
           col_buffers,
@@ -3326,9 +3320,9 @@ int32_t Executor::executePlanWithGroupBy(
   return 0;
 }
 
-std::vector<int64_t> Executor::getJoinHashTablePtrs(const ExecutorDeviceType device_type,
+std::vector<int8_t*> Executor::getJoinHashTablePtrs(const ExecutorDeviceType device_type,
                                                     const int device_id) {
-  std::vector<int64_t> table_ptrs;
+  std::vector<int8_t*> table_ptrs;
   const auto& join_hash_tables = plan_state_->join_info_.join_hash_tables_;
   for (auto hash_table : join_hash_tables) {
     if (!hash_table) {

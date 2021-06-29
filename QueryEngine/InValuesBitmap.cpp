@@ -92,14 +92,11 @@ InValuesBitmap::InValuesBitmap(const std::vector<int64_t>& values,
 #ifdef HAVE_CUDA
   if (memory_level_ == Data_Namespace::GPU_LEVEL) {
     for (int device_id = 0; device_id < device_count_; ++device_id) {
+      auto device_allocator = data_mgr_->createGpuAllocator(device_id);
       gpu_buffers_.emplace_back(
-          CudaAllocator::allocGpuAbstractBuffer(data_mgr, bitmap_sz_bytes, device_id));
+          data_mgr->alloc(Data_Namespace::GPU_LEVEL, device_id, bitmap_sz_bytes));
       auto gpu_bitset = gpu_buffers_.back()->getMemoryPtr();
-      copy_to_gpu(data_mgr,
-                  reinterpret_cast<CUdeviceptr>(gpu_bitset),
-                  cpu_bitset,
-                  bitmap_sz_bytes,
-                  device_id);
+      device_allocator->copyToDevice(gpu_bitset, cpu_bitset, bitmap_sz_bytes);
       bitsets_.push_back(gpu_bitset);
     }
     free(cpu_bitset);
