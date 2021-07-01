@@ -21,6 +21,9 @@
 #include "../Analyzer/Analyzer.h"
 #include "Execute.h"
 
+#include "L0Kernel.h"
+#include "L0Mgr/L0Mgr.h"
+
 // Code generation utility to be used for queries and scalar expressions.
 class CodeGenerator {
  public:
@@ -98,6 +101,13 @@ class CodeGenerator {
       const std::unordered_set<llvm::Function*>& live_funcs,
       const CompilationOptions& co,
       const GPUTarget& gpu_target);
+
+  static std::shared_ptr<L0CompilationContext> generateNativeL0Code(
+      llvm::Function* func,
+      llvm::Function* wrapper_func,
+      const std::unordered_set<llvm::Function*>& live_funcs,
+      const CompilationOptions& co,
+      const l0::L0Manager* l0_mgr);
 
   static void link_udf_module(const std::unique_ptr<llvm::Module>& udf_module,
                               llvm::Module& module,
@@ -609,7 +619,13 @@ class ScalarCodeGenerator : public CodeGenerator {
   std::vector<void*> generateNativeCode(const CompiledExpression& compiled_expression,
                                         const CompilationOptions& co);
 
+  // Specific method for L0 code generation - L0 kernel is called with a handle.
+  std::vector<l0::L0Kernel*> generateNativeL0Code(
+      const CompiledExpression& compiled_expression,
+      const CompilationOptions& co);
+
   CudaMgr_Namespace::CudaMgr* getCudaMgr() const { return cuda_mgr_.get(); }
+  l0::L0Manager* getL0Mgr() const { return l0_mgr_.get(); }
 
   using ColumnMap =
       std::unordered_map<InputColDescriptor, std::shared_ptr<Analyzer::ColumnVar>>;
@@ -627,12 +643,18 @@ class ScalarCodeGenerator : public CodeGenerator {
                                            llvm::Function* wrapper_func,
                                            const CompilationOptions& co);
 
+  std::vector<l0::L0Kernel*> generateNativeL0Code(llvm::Function* func,
+                                                  llvm::Function* wrapper_func,
+                                                  const CompilationOptions& co);
+
   std::unique_ptr<llvm::Module> module_;
   ExecutionEngineWrapper execution_engine_;
   std::unique_ptr<CgenState> own_cgen_state_;
   std::unique_ptr<PlanState> own_plan_state_;
   std::unique_ptr<CudaMgr_Namespace::CudaMgr> cuda_mgr_;
+  std::unique_ptr<l0::L0Manager> l0_mgr_;
   std::shared_ptr<GpuCompilationContext> gpu_compilation_context_;
+  std::shared_ptr<L0CompilationContext> l0_compilation_context_;
   std::unique_ptr<llvm::TargetMachine> nvptx_target_machine_;
 };
 

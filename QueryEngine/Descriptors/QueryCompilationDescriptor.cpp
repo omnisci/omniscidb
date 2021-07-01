@@ -43,6 +43,7 @@ std::unique_ptr<QueryMemoryDescriptor> QueryCompilationDescriptor::compile(
         co,
         eo,
         cat->getDataMgr().getCudaMgr(),
+        cat->getDataMgr().getL0Mgr(),
         g_enable_lazy_fetch &&
             co.allow_lazy_fetch,  // TODO(adb): remove param and just read from CO
         executor->row_set_mem_owner_,
@@ -62,6 +63,7 @@ std::unique_ptr<QueryMemoryDescriptor> QueryCompilationDescriptor::compile(
                                   co,
                                   eo,
                                   cat->getDataMgr().getCudaMgr(),
+                                  cat->getDataMgr().getL0Mgr(),
                                   false,
                                   executor->row_set_mem_owner_,
                                   max_groups_buffer_entry_guess,

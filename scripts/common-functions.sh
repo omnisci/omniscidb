@@ -96,7 +96,7 @@ function install_arrow() {
     -DARROW_PARQUET=ON \
     -DARROW_FILESYSTEM=ON \
     -DARROW_S3=ON \
-    -DARROW_CUDA=ON \
+    -DARROW_CUDA=OFF \
     -DTHRIFT_HOME=${THRIFT_HOME:-$PREFIX} \
     ${ARROW_TSAN} \
     ..
@@ -182,10 +182,10 @@ function install_llvm() {
     mkdir -p llvm-$VERS.src/tools/clang/tools
     mv clang-tools-extra-$VERS.src llvm-$VERS.src/tools/clang/tools/extra
 
-    # Patch llvm 9 for glibc 2.31+ support
-    # from: https://bugs.gentoo.org/708430
-    pushd llvm-$VERS.src/projects/
-    patch -p0 < $SCRIPTS_DIR/llvm-9-glibc-2.31-708430.patch
+    # install spirv translator from github
+    git clone -b llvm_release_100 https://github.com/KhronosGroup/SPIRV-LLVM-Translator llvm-$VERS.src/projects/llvm-spirv
+    pushd llvm-$VERS.src/projects/llvm-spirv
+    git checkout 576abae62cecd171992017a4a786e3831221ab8d
     popd
 
     rm -rf build.llvm-$VERS
@@ -197,7 +197,16 @@ function install_llvm() {
       LLVM_SHARED="-DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON"
     fi
 
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX -DLLVM_ENABLE_RTTI=on -DLLVM_USE_INTEL_JITEVENTS=on $LLVM_SHARED ../llvm-$VERS.src
+    cmake -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=$PREFIX \
+        -DLLVM_ENABLE_RTTI=on \
+        -DLLVM_USE_INTEL_JITEVENTS=on \
+        $LLVM_SHARED \
+        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF \
+        -DLLVM_ENABLE_ABI_BREAKING_CHECKS=0 \
+        -DLLVM_SPIRV_INCLUDE_TESTS=OFF \
+        -DLLVM_USE_LINKER=gold \
+        ../llvm-$VERS.src
     makej
     make install
     popd

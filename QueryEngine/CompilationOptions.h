@@ -19,7 +19,7 @@
 
 #include <vector>
 
-enum class ExecutorDeviceType { CPU, GPU };
+enum class ExecutorDeviceType { CPU, GPU, L0 };
 
 enum class ExecutorOptLevel { Default, LoopStrengthReduction, ReductionJIT };
 

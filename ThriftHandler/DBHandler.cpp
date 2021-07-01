@@ -47,6 +47,7 @@
 #include "Geospatial/Transforms.h"
 #include "Geospatial/Types.h"
 #include "ImportExport/Importer.h"
+#include "L0Mgr/L0Mgr.h"
 #include "LockMgr/LockMgr.h"
 #include "OSDependent/omnisci_hostname.h"
 #include "Parser/ParserWrapper.h"
@@ -330,6 +331,8 @@ void DBHandler::initialize(const bool is_new_db) {
   }
 
   std::unique_ptr<CudaMgr_Namespace::CudaMgr> cuda_mgr;
+  std::unique_ptr<l0::L0Manager> l0_mgr;
+
 #ifdef HAVE_CUDA
   if (!cpu_mode_only_ || is_rendering_enabled) {
     try {
@@ -342,12 +345,24 @@ void DBHandler::initialize(const bool is_new_db) {
       is_rendering_enabled = false;
     }
   }
+#elif HAVE_L0
+  if (!cpu_mode_only_ || is_rendering_enabled) {
+    try {
+      l0_mgr = std::make_unique<l0::L0Manager>();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Unable to instantiate L0 Manager, falling back to CPU-only mode. "
+                 << e.what();
+      cpu_mode_only_ = true;
+      is_rendering_enabled = false;
+    }
+  }
 #endif  // HAVE_CUDA
 
   try {
     data_mgr_.reset(new Data_Namespace::DataMgr(data_path.string(),
                                                 system_parameters_,
                                                 std::move(cuda_mgr),
+                                                std::move(l0_mgr),
                                                 !cpu_mode_only_,
                                                 total_reserved,
                                                 num_reader_threads_,

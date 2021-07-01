@@ -28,6 +28,10 @@
 #include "Shared/MathUtils.h"
 #include "StreamingTopN.h"
 
+#ifdef HAVE_L0
+#include "LLVMSPIRVLib/LLVMSPIRVLib.h"
+#endif
+
 #if LLVM_VERSION_MAJOR < 9
 static_assert(false, "LLVM Version >= 9 is required.");
 #endif
@@ -865,6 +869,10 @@ llvm::StringRef get_gpu_target_triple_string() {
   return llvm::StringRef("nvptx64-nvidia-cuda");
 }
 
+llvm::StringRef get_l0_target_triple_string() {
+  return llvm::StringRef("spir-unknown-unknown");
+}
+
 llvm::StringRef get_gpu_data_layout() {
   return llvm::StringRef(
       "e-p:64:64:64-i1:8:8-i8:8:8-"
@@ -1185,6 +1193,133 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
 #else
   return {};
 #endif
+}
+
+std::shared_ptr<L0CompilationContext> CodeGenerator::generateNativeL0Code(
+    llvm::Function* func,
+    llvm::Function* wrapper_func,
+    const std::unordered_set<llvm::Function*>& live_funcs,
+    const CompilationOptions& co,
+    const l0::L0Manager* l0_mgr) {
+#ifdef HAVE_L0
+  auto module = func->getParent();
+
+  auto pass_manager_builder = llvm::PassManagerBuilder();
+  llvm::legacy::PassManager PM;
+  pass_manager_builder.populateModulePassManager(PM);
+  optimize_ir(func, module, PM, live_funcs, co);
+
+  std::ostringstream ss;
+  std::string err;
+
+  module->setTargetTriple("spir64-unknown-unknown");
+
+  llvm::LLVMContext& ctx = module->getContext();
+  // set metadata -- pretend we're opencl (see
+  // https://github.com/KhronosGroup/SPIRV-LLVM-Translator/blob/master/docs/SPIRVRepresentationInLLVM.rst#spir-v-instructions-mapped-to-llvm-metadata)
+  llvm::Metadata* spirv_src_ops[] = {
+      llvm::ConstantAsMetadata::get(
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 3 /*OpenCL_C*/)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx),
+                                                           102000 /*OpenCL ver 1.2*/))};
+  llvm::NamedMDNode* spirv_src = module->getOrInsertNamedMetadata("spirv.Source");
+  spirv_src->addOperand(llvm::MDNode::get(ctx, spirv_src_ops));
+
+  SPIRV::TranslatorOpts opts;
+  opts.enableAllExtensions();
+  opts.setDesiredBIsRepresentation(SPIRV::BIsRepresentation::OpenCL12);
+  opts.setDebugInfoEIS(SPIRV::DebugInfoEIS::OpenCL_DebugInfo_100);
+
+  std::unordered_set<llvm::Function*> roots{wrapper_func, func};
+
+  // todo: add helper funcs
+  // todo: add udf funcs
+
+  std::vector<llvm::Function*> rt_funcs;
+  for (auto& Fn : *module) {
+    if (!roots.count(&Fn)) {
+      rt_funcs.push_back(&Fn);
+    }
+  }
+
+  for (auto& pFn : rt_funcs) {
+    // pFn->removeFromParent();
+    pFn->eraseFromParent();
+  }
+
+  // todo: enable when runtime functions are supported
+  // for (auto& pFn : rt_funcs) {
+  //   module->getFunctionList().push_back(pFn);
+  // }
+
+  for (auto& Fn : *module) {
+    Fn.setCallingConv(llvm::CallingConv::SPIR_FUNC);
+  }
+
+  llvm::errs() << "func: " << (func ? func->getName() : "null") << "\n";
+  llvm::errs() << "wrapper func: " << (wrapper_func ? wrapper_func->getName() : "null")
+               << "\n";
+  CHECK(wrapper_func);
+
+  wrapper_func->setCallingConv(llvm::CallingConv::SPIR_KERNEL);
+
+  std::error_code EC;
+  llvm::raw_fd_ostream OS("ir.bc", EC, llvm::sys::fs::F_None);
+  llvm::WriteBitcodeToFile(*module, OS);
+  OS.flush();
+  llvm::errs() << EC.category().name() << '\n';
+
+  auto success = writeSpirv(module, opts, ss, err);
+  if (!success) {
+    llvm::errs() << "Spirv translation failed with error: " << err << "\n";
+  } else {
+    llvm::errs() << "Spirv tranlsation success.\n";
+  }
+  CHECK(success);
+
+  const auto func_name = wrapper_func->getName().str();
+  L0BinResult bin_result;
+  try {
+    bin_result = spv_to_bin(ss.str(), func_name, 1 /*todo block size*/, l0_mgr);
+  } catch (l0::L0Exception& e) {
+    llvm::errs() << e.what() << "\n";
+    return {};
+  }
+
+  auto compilation_ctx = std::make_shared<L0CompilationContext>();
+  auto device_compilation_ctx = std::make_unique<L0DeviceCompilationContext>(
+      bin_result.kernel, bin_result.module, l0_mgr, 0, 1);
+  compilation_ctx->addDeviceCode(move(device_compilation_ctx));
+  return compilation_ctx;
+#else
+  return {};
+#endif  // HAVE_L0
+}
+
+std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenL0(
+    llvm::Function* query_func,
+    llvm::Function* multifrag_query_func,
+    std::unordered_set<llvm::Function*>& live_funcs,
+    const bool no_inline,
+    const l0::L0Manager* l0_mgr,
+    const CompilationOptions& co) {
+#ifdef HAVE_L0
+  auto module = multifrag_query_func->getParent();
+  CHECK(l0_mgr);
+  // todo: cache
+
+  std::shared_ptr<L0CompilationContext> compilation_context;
+  try {
+    compilation_context = CodeGenerator::generateNativeL0Code(
+        query_func, multifrag_query_func, live_funcs, co, l0_mgr);
+  } catch (l0::L0Exception& e) {
+    LOG(WARNING) << "Caught L0 exception: " << e.what() << "\n";
+    throw;
+  }
+  return compilation_context;
+#else
+  return {};
+#endif  // HAVE_L0
 }
 
 std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenGPU(
@@ -1516,53 +1651,54 @@ void set_row_func_argnames(llvm::Function* row_func,
 
 llvm::Function* create_row_function(const size_t in_col_count,
                                     const size_t agg_col_count,
-                                    const bool hoist_literals,
+                                    const CompilationOptions& co,
                                     llvm::Module* module,
                                     llvm::LLVMContext& context) {
   std::vector<llvm::Type*> row_process_arg_types;
+  unsigned int AS = (co.device_type == ExecutorDeviceType::L0) ? 4 : 0;
 
   if (agg_col_count) {
     // output (aggregate) arguments
     for (size_t i = 0; i < agg_col_count; ++i) {
-      row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context));
+      row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context, AS));
     }
   } else {
     // group by buffer
-    row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context));
+    row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context, AS));
     // current match count
-    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context));
+    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context, AS));
     // total match count passed from the caller
-    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context));
+    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context, AS));
     // old total match count returned to the caller
-    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context));
+    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context, AS));
     // max matched (total number of slots in the output buffer)
-    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context));
+    row_process_arg_types.push_back(llvm::Type::getInt32PtrTy(context, AS));
   }
 
   // aggregate init values
-  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context));
+  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context, AS));
 
   // position argument
   row_process_arg_types.push_back(llvm::Type::getInt64Ty(context));
 
   // fragment row offset argument
-  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context));
+  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context, AS));
 
   // number of rows for each scan
-  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context));
+  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context, AS));
 
   // literals buffer argument
-  if (hoist_literals) {
-    row_process_arg_types.push_back(llvm::Type::getInt8PtrTy(context));
+  if (co.hoist_literals) {
+    row_process_arg_types.push_back(llvm::Type::getInt8PtrTy(context, AS));
   }
 
   // column buffer arguments
   for (size_t i = 0; i < in_col_count; ++i) {
-    row_process_arg_types.emplace_back(llvm::Type::getInt8PtrTy(context));
+    row_process_arg_types.emplace_back(llvm::Type::getInt8PtrTy(context, AS));
   }
 
   // join hash table argument
-  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context));
+  row_process_arg_types.push_back(llvm::Type::getInt64PtrTy(context, AS));
 
   // generate the function
   auto ft =
@@ -1572,7 +1708,7 @@ llvm::Function* create_row_function(const size_t in_col_count,
       llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "row_func", module);
 
   // set the row function argument names; for debugging purposes only
-  set_row_func_argnames(row_func, in_col_count, agg_col_count, hoist_literals);
+  set_row_func_argnames(row_func, in_col_count, agg_col_count, co.hoist_literals);
 
   return row_func;
 }
@@ -2508,6 +2644,7 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
                           const CompilationOptions& co,
                           const ExecutionOptions& eo,
                           const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+                          const l0::L0Manager* l0_mgr,
                           const bool allow_lazy_fetch,
                           std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
                           const size_t max_groups_buffer_entry_guess,
@@ -2520,6 +2657,12 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
   if (co.device_type == ExecutorDeviceType::GPU) {
     const auto cuda_mgr = catalog_->getDataMgr().getCudaMgr();
     if (!cuda_mgr) {
+      throw QueryMustRunOnCpu();
+    }
+  }
+  if (co.device_type == ExecutorDeviceType::L0) {
+    const auto l0_mgr = catalog_->getDataMgr().getL0Mgr();
+    if (!l0_mgr) {
       throw QueryMustRunOnCpu();
     }
   }
@@ -2608,24 +2751,36 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
                 func->getLinkage() == llvm::GlobalValue::LinkageTypes::InternalLinkage ||
                 CodeGenerator::alwaysCloneRuntimeFunction(func));
       });
-  if (co.device_type == ExecutorDeviceType::CPU) {
-    if (is_udf_module_present(true)) {
-      CodeGenerator::link_udf_module(udf_cpu_module, *rt_module_copy, cgen_state_.get());
-    }
-    if (is_rt_udf_module_present(true)) {
-      CodeGenerator::link_udf_module(
-          rt_udf_cpu_module, *rt_module_copy, cgen_state_.get());
-    }
-  } else {
-    rt_module_copy->setDataLayout(get_gpu_data_layout());
-    rt_module_copy->setTargetTriple(get_gpu_target_triple_string());
-    if (is_udf_module_present()) {
-      CodeGenerator::link_udf_module(udf_gpu_module, *rt_module_copy, cgen_state_.get());
-    }
-    if (is_rt_udf_module_present()) {
-      CodeGenerator::link_udf_module(
-          rt_udf_gpu_module, *rt_module_copy, cgen_state_.get());
-    }
+  switch (co.device_type) {
+    case ExecutorDeviceType::CPU:
+      if (is_udf_module_present(true)) {
+        CodeGenerator::link_udf_module(
+            udf_cpu_module, *rt_module_copy, cgen_state_.get());
+      }
+      if (is_rt_udf_module_present(true)) {
+        CodeGenerator::link_udf_module(
+            rt_udf_cpu_module, *rt_module_copy, cgen_state_.get());
+      }
+      break;
+    case ExecutorDeviceType::GPU:
+      rt_module_copy->setDataLayout(get_gpu_data_layout());
+      rt_module_copy->setTargetTriple(get_gpu_target_triple_string());
+      if (is_udf_module_present()) {
+        CodeGenerator::link_udf_module(
+            udf_gpu_module, *rt_module_copy, cgen_state_.get());
+      }
+      if (is_rt_udf_module_present()) {
+        CodeGenerator::link_udf_module(
+            rt_udf_gpu_module, *rt_module_copy, cgen_state_.get());
+      }
+      break;
+    case ExecutorDeviceType::L0:
+      rt_module_copy->setTargetTriple(get_l0_target_triple_string());
+      // todo: link udf & rt_udf
+      break;
+
+    default:
+      CHECK(false) << "Invalid device type!\n";
   }
 
   cgen_state_->module_ = rt_module_copy.release();
@@ -2646,7 +2801,7 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
                                                                    gpu_smem_context)
                                          : query_template(cgen_state_->module_,
                                                           agg_slot_count,
-                                                          co.hoist_literals,
+                                                          co,
                                                           !!ra_exe_unit.estimator,
                                                           gpu_smem_context);
   bind_pos_placeholders("pos_start", true, query_func, cgen_state_->module_);
@@ -2671,7 +2826,7 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
 
   cgen_state_->row_func_ = create_row_function(ra_exe_unit.input_col_descs.size(),
                                                is_group_by ? 0 : agg_slot_count,
-                                               co.hoist_literals,
+                                               co,
                                                cgen_state_->module_,
                                                cgen_state_->context_);
   CHECK(cgen_state_->row_func_);
@@ -2875,16 +3030,31 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
   }
 
   // Generate final native code from the LLVM IR.
+  std::shared_ptr<CompilationContext> compilation_context;
+  switch (co.device_type) {
+    case ExecutorDeviceType::CPU:
+      compilation_context =
+          optimizeAndCodegenCPU(query_func, multifrag_query_func, live_funcs, co);
+      break;
+    case ExecutorDeviceType::GPU:
+      compilation_context = optimizeAndCodegenGPU(query_func,
+                                                  multifrag_query_func,
+                                                  live_funcs,
+                                                  is_group_by || ra_exe_unit.estimator,
+                                                  cuda_mgr,
+                                                  co);
+      break;
+    case ExecutorDeviceType::L0:
+      compilation_context = optimizeAndCodegenL0(
+          query_func, multifrag_query_func, live_funcs, false, l0_mgr, co);
+      break;
+
+    default:
+      LOG(FATAL) << "Invalid device type";
+      return {};
+  }
   return std::make_tuple(
-      CompilationResult{
-          co.device_type == ExecutorDeviceType::CPU
-              ? optimizeAndCodegenCPU(query_func, multifrag_query_func, live_funcs, co)
-              : optimizeAndCodegenGPU(query_func,
-                                      multifrag_query_func,
-                                      live_funcs,
-                                      is_group_by || ra_exe_unit.estimator,
-                                      cuda_mgr,
-                                      co),
+      CompilationResult{compilation_context,
           cgen_state_->getLiterals(),
           output_columnar,
           llvm_ir,

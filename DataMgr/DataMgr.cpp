@@ -43,11 +43,13 @@ namespace Data_Namespace {
 DataMgr::DataMgr(const std::string& dataDir,
                  const SystemParameters& system_parameters,
                  std::unique_ptr<CudaMgr_Namespace::CudaMgr> cudaMgr,
+                 std::unique_ptr<l0::L0Manager> l0Mgr,
                  const bool useGpus,
                  const size_t reservedGpuMem,
                  const size_t numReaderThreads,
                  const File_Namespace::DiskCacheConfig cache_config)
     : cudaMgr_{std::move(cudaMgr)}
+    , l0Mgr_(std::move(l0Mgr))
     , dataDir_{dataDir}
     , hasGpus_{false}
     , reservedGpuMem_{reservedGpuMem} {

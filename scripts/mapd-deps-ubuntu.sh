@@ -117,7 +117,7 @@ install_cmake
 
 # llvm
 # (see common-functions.sh)
-LLVM_BUILD_DYLIB=true
+LLVM_BUILD_DYLIB=false
 install_llvm
 
 # Geo Support

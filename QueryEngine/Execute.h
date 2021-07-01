@@ -772,6 +772,7 @@ class Executor {
       const CompilationOptions& co,
       const ExecutionOptions& eo,
       const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+      const l0::L0Manager* l0_mgr,
       const bool allow_lazy_fetch,
       std::shared_ptr<RowSetMemoryOwner>,
       const size_t max_groups_buffer_entry_count,
@@ -870,6 +871,13 @@ class Executor {
       std::unordered_set<llvm::Function*>&,
       const bool no_inline,
       const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+      const CompilationOptions&);
+  std::shared_ptr<CompilationContext> optimizeAndCodegenL0(
+      llvm::Function*,
+      llvm::Function*,
+      std::unordered_set<llvm::Function*>&,
+      const bool no_inline,
+      const l0::L0Manager* l0_mgr,
       const CompilationOptions&);
   std::string generatePTX(const std::string&) const;
   void initializeNVPTXBackend() const;
