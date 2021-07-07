@@ -204,6 +204,17 @@ std::shared_ptr<PerfectJoinHashTable> PerfectJoinHashTable::getInstance(
     throw TooManyHashEntries();
   }
 
+  // We don't want to build huge and very sparse tables
+  // to consume lots of memory.
+  if (bucketized_entry_count > 1000000) {
+    const auto& query_info =
+        get_inner_query_info(inner_col->get_table_id(), query_infos).info;
+    if (query_info.getNumTuplesUpperBound() * 100 <
+        huge_join_hash_min_load_ * bucketized_entry_count) {
+      throw TooManyHashEntries();
+    }
+  }
+
   if (qual_bin_oper->get_optype() == kBW_EQ &&
       col_range.getIntMax() >= std::numeric_limits<int64_t>::max()) {
     throw HashJoinFail("Cannot translate null value for kBW_EQ");

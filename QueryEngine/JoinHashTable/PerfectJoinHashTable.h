@@ -108,6 +108,11 @@ class PerfectJoinHashTable : public HashJoin {
   virtual ~PerfectJoinHashTable() {}
 
  private:
+  // We don't want to create JoinHashTable for big ranges
+  // with small number of valid entries. Therefore we
+  // define the minimal load level (in percent).
+  static constexpr size_t huge_join_hash_min_load_ = 10;
+
   // Equijoin API
   ColumnsForDevice fetchColumnsForDevice(
       const std::vector<Fragmenter_Namespace::FragmentInfo>& fragments,
