@@ -2451,9 +2451,7 @@ bool Executor::needFetchAllFragments(const InputColDescriptor& inner_col_desc,
   const int nest_level = inner_col_desc.getScanDesc().getNestLevel();
   if (nest_level < 1 ||
       inner_col_desc.getScanDesc().getSourceType() != InputSourceType::TABLE ||
-      ra_exe_unit.join_quals.empty() || input_descs.size() < 2 ||
-      (ra_exe_unit.join_quals.empty() &&
-       plan_state_->isLazyFetchColumn(inner_col_desc))) {
+      ra_exe_unit.join_quals.empty() || input_descs.size() < 2) {
     return false;
   }
   const int table_id = inner_col_desc.getScanDesc().getTableId();
