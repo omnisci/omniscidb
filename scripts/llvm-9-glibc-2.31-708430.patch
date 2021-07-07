@@ -1,12 +1,11 @@
----compiler - rt / lib / sanitizer_common / sanitizer_platform_limits_posix.cc.orig 2020 -
-    03 - 11 20 : 35 : 37.099808821 + 0100 +++compiler -
-    rt / lib / sanitizer_common / sanitizer_platform_limits_posix.cc 2020 - 03 -
-    11 20 : 36 : 08.279808758 + 0100 @ @-1128,
-    7 + 1128, 7 @ @CHECK_SIZE_AND_OFFSET(ipc_perm, cgid);
-#if !defined(__aarch64__) || !SANITIZER_LINUX || __GLIBC_PREREQ(2, 21)
-/* On aarch64 glibc 2.20 and earlier provided incorrect mode field.  */
-- CHECK_SIZE_AND_OFFSET(ipc_perm, mode);
-+  // CHECK_SIZE_AND_OFFSET(ipc_perm, mode);
-#endif
-
-    CHECK_TYPE_SIZE(shmid_ds);
+--- compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cc.orig	2020-03-11 20:35:37.099808821 +0100
++++ compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cc	2020-03-11 20:36:08.279808758 +0100
+@@ -1128,7 +1128,7 @@
+ CHECK_SIZE_AND_OFFSET(ipc_perm, cgid);
+ #if !defined(__aarch64__) || !SANITIZER_LINUX || __GLIBC_PREREQ (2, 21)
+ /* On aarch64 glibc 2.20 and earlier provided incorrect mode field.  */
+-CHECK_SIZE_AND_OFFSET(ipc_perm, mode);
++//CHECK_SIZE_AND_OFFSET(ipc_perm, mode);
+ #endif
+ 
+ CHECK_TYPE_SIZE(shmid_ds);
