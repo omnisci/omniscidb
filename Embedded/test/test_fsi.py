@@ -1,20 +1,25 @@
 import os
-import numpy as np
+import pytest
 import pyarrow as pa
 from pyarrow import csv
 import omniscidbe as dbe
 import ctypes
 ctypes._dlopen('libDBEngine.so', ctypes.RTLD_GLOBAL)
 
-d = dbe.PyDbEngine(enable_fsi=1, data='data', calcite_port=9091)
-assert not d.closed
+def test_init():
+    global engine
+    engine = dbe.PyDbEngine(
+                enable_fsi=1,
+                calcite_port=9091,
+            )
+    assert bool(engine.closed) == False
 
 root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-csv_file = root + "/Tests/Import/datafiles/trips_with_headers_top1000.csv"
 
-print("DDL")
-r = d.executeDDL("""
-CREATE TEMPORARY TABLE trips (
+def test_FSI_DDL():
+    csv_file = root + "/Tests/Import/datafiles/trips_with_headers_top1000.csv"
+
+    r = engine.executeDDL("""CREATE TEMPORARY TABLE trips (
 trip_id BIGINT,
 vendor_id TEXT ENCODING NONE,
 pickup_datetime TIMESTAMP,
@@ -66,7 +71,13 @@ dropoff_cdeligibil TEXT ENCODING NONE,
 dropoff_ntacode TEXT ENCODING NONE,
 dropoff_ntaname TEXT ENCODING NONE,
 dropoff_puma BIGINT) WITH (storage_type='CSV:""" + csv_file + """', fragment_size=100);""")
-print("DML")
-r = d.executeDML("select count(*) from trips;")
-print("done")
-assert r
+
+    r = engine.executeDML("select * from trips;")
+    assert r
+    assert r.colCount() == 51
+    assert r.rowCount() == 999
+
+
+
+if __name__ == "__main__":
+    pytest.main(["-v", __file__])

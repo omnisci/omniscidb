@@ -31,6 +31,9 @@ if(PYTHON_EXECUTABLE)
     )
     add_custom_target(dbe4py-test
         COMMAND ${PYTHON_EXECUTABLE} -m pytest -v ${CMAKE_CURRENT_SOURCE_DIR}/test/test_exceptions.py
+        COMMAND ${PYTHON_EXECUTABLE} -m pytest -v ${CMAKE_CURRENT_SOURCE_DIR}/test/test_readcsv.py
+        COMMAND ${PYTHON_EXECUTABLE} -m pytest -v ${CMAKE_CURRENT_SOURCE_DIR}/test/test_fsi.py
+        COMMAND ${PYTHON_EXECUTABLE} -m pytest -v ${CMAKE_CURRENT_SOURCE_DIR}/test/test_ra.py
         DEPENDS dbe4py
     )
     add_custom_target(dbe4py-install

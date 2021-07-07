@@ -10,7 +10,8 @@ import numpy
 import shutil
 ctypes._dlopen('libDBEngine.so', ctypes.RTLD_GLOBAL)
 
-data_path = "test_dbe_data"
+data_path = "dbe_test_data"
+
 #######################Check init with wrong parameter
 def test_failed_init():
     global engine
@@ -20,7 +21,7 @@ def test_failed_init():
         pass
 
     with pytest.raises(RuntimeError) as excinfo:
-        engine = dbe.PyDbEngine(data='/'+data_path, calcite_port=9091)
+        engine = dbe.PyDbEngine(data='/' + data_path, calcite_port=9091)
     assert "Permission denied" in str(excinfo.value)
 
 ######################Check init with right parameters
@@ -70,3 +71,7 @@ def test_double_init():
     with pytest.raises(RuntimeError) as excinfo:
         engine = dbe.PyDbEngine()
     assert "already initialized" in str(excinfo.value)
+
+
+if __name__ == "__main__":
+    pytest.main(["-v", __file__])
