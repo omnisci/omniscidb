@@ -32,7 +32,8 @@ class BaselineHashTable : public HashTable {
                     const size_t entry_count,
                     const size_t emitted_keys_count,
                     const size_t hash_table_size)
-      : gpu_hash_table_buff_(nullptr)
+      : cpu_hash_table_buff_size_(hash_table_size)
+      , gpu_hash_table_buff_(nullptr)
 #ifdef HAVE_CUDA
       , device_id_(0)
       , catalog_(catalog)
@@ -40,7 +41,7 @@ class BaselineHashTable : public HashTable {
       , layout_(layout)
       , entry_count_(entry_count)
       , emitted_keys_count_(emitted_keys_count) {
-    cpu_hash_table_buff_.resize(hash_table_size);
+    cpu_hash_table_buff_.reset(new int8_t[cpu_hash_table_buff_size_]);
   }
 
   // GPU constructor
@@ -84,15 +85,15 @@ class BaselineHashTable : public HashTable {
 
   size_t getHashTableBufferSize(const ExecutorDeviceType device_type) const override {
     if (device_type == ExecutorDeviceType::CPU) {
-      return cpu_hash_table_buff_.size() *
-             sizeof(decltype(cpu_hash_table_buff_)::value_type);
+      return cpu_hash_table_buff_size_ *
+             sizeof(decltype(cpu_hash_table_buff_)::element_type);
     } else {
       return gpu_hash_table_buff_ ? gpu_hash_table_buff_->reservedSize() : 0;
     }
   }
 
   int8_t* getCpuBuffer() override {
-    return reinterpret_cast<int8_t*>(cpu_hash_table_buff_.data());
+    return reinterpret_cast<int8_t*>(cpu_hash_table_buff_.get());
   }
 
   HashType getLayout() const override { return layout_; }
@@ -100,7 +101,8 @@ class BaselineHashTable : public HashTable {
   size_t getEmittedKeysCount() const override { return emitted_keys_count_; }
 
  private:
-  std::vector<int8_t> cpu_hash_table_buff_;
+  std::unique_ptr<int8_t[]> cpu_hash_table_buff_;
+  size_t cpu_hash_table_buff_size_;
   Data_Namespace::AbstractBuffer* gpu_hash_table_buff_;
 
 #ifdef HAVE_CUDA

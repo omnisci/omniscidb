@@ -34,9 +34,10 @@ class PerfectHashTable : public HashTable {
       , entry_count_(entry_count)
       , emitted_keys_count_(emitted_keys_count) {
     if (device_type == ExecutorDeviceType::CPU) {
-      cpu_hash_table_buff_.resize(layout_ == HashType::OneToOne
+      cpu_hash_table_buff_size_ = layout_ == HashType::OneToOne
                                       ? entry_count_
-                                      : 2 * entry_count_ + emitted_keys_count_);
+                                      : 2 * entry_count_ + emitted_keys_count_;
+      cpu_hash_table_buff_.reset(new int32_t[cpu_hash_table_buff_size_]);
     }
   }
 
@@ -64,8 +65,8 @@ class PerfectHashTable : public HashTable {
 
   size_t getHashTableBufferSize(const ExecutorDeviceType device_type) const override {
     if (device_type == ExecutorDeviceType::CPU) {
-      return cpu_hash_table_buff_.size() *
-             sizeof(decltype(cpu_hash_table_buff_)::value_type);
+      return cpu_hash_table_buff_size_ *
+             sizeof(decltype(cpu_hash_table_buff_)::element_type);
     } else {
       return gpu_hash_table_buff_ ? gpu_hash_table_buff_->reservedSize() : 0;
     }
@@ -74,7 +75,7 @@ class PerfectHashTable : public HashTable {
   HashType getLayout() const override { return layout_; }
 
   int8_t* getCpuBuffer() override {
-    return reinterpret_cast<int8_t*>(cpu_hash_table_buff_.data());
+    return reinterpret_cast<int8_t*>(cpu_hash_table_buff_.get());
   }
 
   int8_t* getGpuBuffer() const override {
@@ -88,7 +89,8 @@ class PerfectHashTable : public HashTable {
  private:
   Data_Namespace::AbstractBuffer* gpu_hash_table_buff_{nullptr};
   const Catalog_Namespace::Catalog* catalog_;
-  std::vector<int32_t> cpu_hash_table_buff_;
+  std::unique_ptr<int32_t[]> cpu_hash_table_buff_;
+  size_t cpu_hash_table_buff_size_;
 
   HashType layout_;
   size_t entry_count_;         // number of keys in the hash table
