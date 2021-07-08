@@ -60,6 +60,22 @@ std::string from_extract_field(const ExtractField& fieldno) {
       return "week_saturday";
     case kDATEEPOCH:
       return "dateepoch";
+    case kLDOM:
+      return "daysinmonth";
+    case kISLEAP:
+      return "isleapyear";
+    case kISEOM:
+      return "ismonthend";
+    case kISSOM:
+      return "ismonthstart";
+    case kISEOQ:
+      return "isquarterend";
+    case kISSOQ:
+      return "isquarterstart";
+    case kISEOY:
+      return "isyearend";
+    case kISSOY:
+      return "isyearstart";
     default:
       UNREACHABLE();
   }
@@ -151,6 +167,22 @@ ExtractField ExtractExpr::to_extract_field(const std::string& field) {
     fieldno = kWEEK_SATURDAY;
   } else if (boost::iequals(field, "dateepoch")) {
     fieldno = kDATEEPOCH;
+  } else if (boost::iequals(field, "daysinmonth")) {
+    fieldno = kLDOM;
+  } else if (boost::iequals(field, "isleapyear")) {
+    fieldno = kISLEAP;
+  } else if (boost::iequals(field, "ismonthend")) {
+    fieldno = kISEOM;
+  } else if (boost::iequals(field, "ismonthstart")) {
+    fieldno = kISSOM;
+  } else if (boost::iequals(field, "isquarterend")) {
+    fieldno = kISEOQ;
+  } else if (boost::iequals(field, "isquarterstart")) {
+    fieldno = kISSOQ;
+  } else if (boost::iequals(field, "isyearend")) {
+    fieldno = kISEOY;
+  } else if (boost::iequals(field, "isyearstart")) {
+    fieldno = kISSOY;
   } else {
     throw std::runtime_error("Unsupported field in EXTRACT function " + field);
   }

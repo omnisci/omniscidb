@@ -43,6 +43,20 @@ DEVICE unsigned week_start_from_yoe(unsigned const yoe) {
   return jan4 - jan4dow;
 }
 
+// Return day-of-year since on March 1
+DEVICE int64_t get_doy(const int64_t timeval) {
+  int64_t const day = floor_div(timeval, kSecsPerDay);
+  unsigned const doe = unsigned_mod(day - kEpochAdjustedDays, kDaysPer400Years);
+  unsigned const yoe = (doe - doe / (kDaysPer4Years - 1) + doe / kDaysPer100Years -
+                        (doe == kDaysPer400Years - 1)) /
+                       kDaysPerYear;
+  return doe - (kDaysPerYear * yoe + yoe / 4 - yoe / 100);
+}
+
+DEVICE bool is_leap(const int64_t year) {
+  return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+}
+
 }  // namespace
 
 extern "C" RUNTIME_EXPORT ALWAYS_INLINE DEVICE int64_t
@@ -261,6 +275,55 @@ extract_year(const int64_t timeval) {
   return 2000 + era * 400 + yoe + (MARJAN <= doy);
 }
 
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_last_day_of_month(const int64_t timeval) {
+  constexpr int64_t days[12]{31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31, 28};
+  unsigned const doy = get_doy(timeval);
+  unsigned const year = extract_year(timeval);
+  unsigned const moy = (5 * doy - 2) / 153;
+  return moy != 11 ? days[moy] : is_leap(year) ? days[moy] + 1 : days[moy];
+}
+
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_is_leap_year(const int64_t timeval) {
+  unsigned const year = extract_year(timeval);
+  return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+}
+
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_is_month_end(const int64_t timeval) {
+  constexpr int64_t days[12]{31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31, 28};
+  unsigned const doy = get_doy(timeval) - 1;
+  unsigned const year = extract_year(timeval);
+  unsigned const moy = (5 * doy - 2) / 153;
+  unsigned const dom = extract_day(timeval);
+  return moy != 11 ? (dom == days[moy])
+                   : is_leap(year) ? (dom == (days[moy] + 1)) : (dom == days[moy]);
+}
+
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_is_month_start(const int64_t timeval) {
+  return 1 == extract_day(timeval);
+}
+
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_is_quarter_end(const int64_t timeval) {
+  unsigned const d = extract_day_of_year(timeval);
+  unsigned const year = extract_year(timeval);
+  return is_leap(year) ? (d == 91 || d == 182 || d == 274 || d == 366)
+                       : (d == 90 || d == 181 || d == 273 || d == 365);
+}
+
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_is_quarter_start(const int64_t timeval) {
+  unsigned const d = extract_day_of_year(timeval);
+  unsigned const year = extract_year(timeval);
+  return is_leap(year) ? (d == 1 || d == 92 || d == 183 || d == 275)
+                       : (d == 1 || d == 91 || d == 182 || d == 274);
+}
+
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_is_year_end(const int64_t timeval) {
+  return MARJAN - 1 == get_doy(timeval);
+}
+
+extern "C" ALWAYS_INLINE DEVICE int64_t extract_is_year_start(const int64_t timeval) {
+  return MARJAN == get_doy(timeval);
+}
+
 /*
  * @brief support the SQL EXTRACT function
  */
@@ -304,6 +367,22 @@ DEVICE int64_t ExtractFromTime(ExtractField field, const int64_t timeval) {
       return extract_quarter(timeval);
     case kYEAR:
       return extract_year(timeval);
+    case kLDOM:
+      return extract_last_day_of_month(timeval);
+    case kISLEAP:
+      return extract_is_leap_year(timeval);
+    case kISEOM:
+      return extract_is_month_end(timeval);
+    case kISSOM:
+      return extract_is_month_start(timeval);
+    case kISEOQ:
+      return extract_is_quarter_end(timeval);
+    case kISSOQ:
+      return extract_is_quarter_start(timeval);
+    case kISEOY:
+      return extract_is_year_end(timeval);
+    case kISSOY:
+      return extract_is_year_start(timeval);
   }
 
 #ifdef __CUDACC__

@@ -63,6 +63,22 @@ const char* get_extract_function_name(ExtractField field) {
       return "extract_quarter";
     case kYEAR:
       return "extract_year";
+    case kLDOM:
+      return "extract_last_day_of_month";
+    case kISLEAP:
+      return "extract_is_leap_year";
+    case kISEOM:
+      return "extract_is_month_end";
+    case kISSOM:
+      return "extract_is_month_start";
+    case kISEOQ:
+      return "extract_is_quarter_end";
+    case kISSOQ:
+      return "extract_is_quarter_start";
+    case kISEOY:
+      return "extract_is_year_end";
+    case kISSOY:
+      return "extract_is_year_start";
   }
   UNREACHABLE();
   return "";

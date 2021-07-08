@@ -928,6 +928,22 @@ ExpressionRange getExpressionRange(
     case kWEEK_SUNDAY:
     case kWEEK_SATURDAY:
       return ExpressionRange::makeIntRange(1, 53, 0, has_nulls);
+    case kLDOM:
+      return ExpressionRange::makeIntRange(28, 31, 0, has_nulls);
+    case kISLEAP:
+      return ExpressionRange::makeIntRange(0, 1, 0, has_nulls);
+    case kISEOM:
+      return ExpressionRange::makeIntRange(0, 1, 0, has_nulls);
+    case kISSOM:
+      return ExpressionRange::makeIntRange(0, 1, 0, has_nulls);
+    case kISEOQ:
+      return ExpressionRange::makeIntRange(0, 1, 0, has_nulls);
+    case kISSOQ:
+      return ExpressionRange::makeIntRange(0, 1, 0, has_nulls);
+    case kISEOY:
+      return ExpressionRange::makeIntRange(0, 1, 0, has_nulls);
+    case kISSOY:
+      return ExpressionRange::makeIntRange(0, 1, 0, has_nulls);
     default:
       CHECK(false);
   }
