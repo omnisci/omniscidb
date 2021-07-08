@@ -17,6 +17,7 @@
 #pragma once
 
 #ifdef HAVE_TBB
+#include "tbb/concurrent_vector.h"
 #include "tbb/task_group.h"
 #endif
 
@@ -111,7 +112,7 @@ class TbbThreadPool<T, std::enable_if_t<std::is_object<T>::value>>
   }
 
  private:
-  std::vector<T> results_;
+  tbb::concurrent_vector<T> results_;
 };
 
 #endif
