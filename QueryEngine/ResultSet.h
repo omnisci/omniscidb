@@ -678,7 +678,8 @@ class ResultSet {
 
   static PermutationView topPermutation(PermutationView,
                                         const size_t n,
-                                        const Comparator&);
+                                        const Comparator&,
+                                        const bool single_threaded);
 
   PermutationView initPermutationBuffer(PermutationView permutation,
                                         PermutationIdx const begin,

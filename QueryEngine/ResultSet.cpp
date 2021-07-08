@@ -37,6 +37,10 @@
 #include "Shared/thread_count.h"
 #include "Shared/threadpool.h"
 
+#ifdef HAVE_TBB
+#include "tbb/parallel_sort.h"
+#endif
+
 #include <algorithm>
 #include <bitset>
 #include <future>
@@ -546,7 +550,8 @@ void ResultSet::sort(const std::list<Analyzer::OrderEntry>& order_entries,
     if (top_n == 0) {
       top_n = pv.size();  // top_n == 0 implies a full sort
     }
-    pv = topPermutation(pv, top_n, createComparator(order_entries, pv, executor, false));
+    pv = topPermutation(
+        pv, top_n, createComparator(order_entries, pv, executor, false), false);
     if (pv.size() < permutation_.size()) {
       permutation_.resize(pv.size());
       permutation_.shrink_to_fit();
@@ -606,7 +611,7 @@ void ResultSet::parallelTop(const std::list<Analyzer::OrderEntry>& order_entries
     PermutationView pv(permutation_.data() + interval.begin, 0, interval.size());
     pv = initPermutationBuffer(pv, interval.begin, interval.end);
     const auto compare = createComparator(order_entries, pv, executor, true);
-    permutation_views[interval.index] = topPermutation(pv, top_n, compare);
+    permutation_views[interval.index] = topPermutation(pv, top_n, compare, true);
   };
   threadpool::FuturesThreadPool<void> top_sort_threads;
   for (auto interval : makeIntervals<PermutationIdx>(0, permutation_.size(), nthreads)) {
@@ -630,7 +635,7 @@ void ResultSet::parallelTop(const std::list<Analyzer::OrderEntry>& order_entries
   // Top sort final range.
   PermutationView pv(permutation_.data(), end - permutation_.begin());
   const auto compare = createComparator(order_entries, pv, executor, false);
-  pv = topPermutation(pv, top_n, compare);
+  pv = topPermutation(pv, top_n, compare, false);
   permutation_.resize(pv.size());
   permutation_.shrink_to_fit();
 }
@@ -920,12 +925,17 @@ bool ResultSet::ResultSetComparator<BUFFER_ITERATOR_TYPE>::operator()(
 // Return PermutationView with new size() = min(n, permutation.size()).
 PermutationView ResultSet::topPermutation(PermutationView permutation,
                                           const size_t n,
-                                          const Comparator& compare) {
+                                          const Comparator& compare,
+                                          const bool single_threaded) {
   auto timer = DEBUG_TIMER(__func__);
   if (n < permutation.size()) {
     std::partial_sort(
         permutation.begin(), permutation.begin() + n, permutation.end(), compare);
     permutation.resize(n);
+#ifdef HAVE_TBB
+  } else if (!single_threaded) {
+    tbb::parallel_sort(permutation.begin(), permutation.end(), compare);
+#endif
   } else {
     std::sort(permutation.begin(), permutation.end(), compare);
   }
