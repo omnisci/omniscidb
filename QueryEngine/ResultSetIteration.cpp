@@ -670,7 +670,7 @@ int64_t ResultSet::lazyReadInt(const int64_t ival,
         bool is_end{false};
         ChunkIter_get_nth(
             reinterpret_cast<ChunkIter*>(const_cast<int8_t*>(frag_col_buffer)),
-            storage_lookup_result.fixedup_entry_idx,
+            ival_copy,
             false,
             &vd,
             &is_end);
